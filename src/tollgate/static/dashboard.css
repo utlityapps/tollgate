@@ -42,12 +42,21 @@ button:disabled { opacity: .55; cursor: default; }
 .panel[hidden], [hidden] { display: none !important; }
 @media (min-width: 1180px) {
   #tab-decisions { grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr); }
-  #decisionsGrid { grid-column: 1; grid-row: 1; }
+  #decisionsPane { grid-column: 1; grid-row: 1; }
   #firedCard { grid-column: 1; grid-row: 2; }
   #detail { grid-column: 2; grid-row: 1 / span 2; align-self: start; max-height: 704px; }
 }
 .ag-theme-quartz.grid { --ag-cell-horizontal-padding: 10px; } /* beats the theme styles AG Grid injects at runtime */
 .grid { height: 420px; width: 100%; } .grid.short { height: 260px; } .grid.tall { height: 640px; }
+.pane { min-width: 0; }
+.gridbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 8px; }
+.gridbar input[type="search"] { flex: 0 1 230px; width: 230px; min-width: 0; }
+.gridbar .count { margin-left: auto; font-size: 12px; }
+.seg { display: inline-flex; }
+.seg button { margin-left: -1px; border-radius: 0; padding: 7px 12px; }
+.seg button:first-child { margin-left: 0; border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button[aria-pressed="true"] { background: var(--navy); border-color: var(--navy); color: #fff; position: relative; }
 .stack { grid-template-columns: minmax(0, 1fr); }
 .card, .detail { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
 .detail { max-height: 640px; overflow: auto; }
@@ -114,6 +123,10 @@ table.levels tr.base td { color: var(--muted); } table.levels td.bad { color: va
   .kpi { padding: 8px 10px; }
   .kpi span { font-size: 19px; }
   .grid { height: 340px; }
+  .gridbar input[type="search"] { order: 1; flex: 1 1 140px; width: auto; } /* row 1: search and export */
+  .gridbar #exportCsv { order: 2; }
+  .gridbar .seg { order: 3; }                                               /* row 2: outcome chips and the count */
+  .gridbar .count { order: 4; margin-left: 0; flex: 1; }
   .detail { max-height: none; }
   .btnrow button { flex: 1 1 100%; }
   ul.rank li { grid-template-columns: minmax(0, 1fr); }

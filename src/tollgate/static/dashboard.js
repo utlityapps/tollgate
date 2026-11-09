@@ -11,6 +11,7 @@
     health: null,
     decisions: [],
     selectedId: null,
+    outcome: "ALL", // the outcome chip in the decision-log toolbar: ALL, APPROVE, ESCALATE or DENY
     tab: "decisions",
     redteamRan: false,
     redteamRunning: false,
@@ -126,33 +127,97 @@
     if (decisionsApi) decisionsApi.setColumnsVisible(WIDE_ONLY, !narrow.matches);
   }
 
+  // A CSV opened in a spreadsheet runs any cell that starts with = + - @ (or a tab or CR) as a formula.
+  // Merchant and item names are attacker-controlled, so such cells are exported as text.
+  const csvCell = (value) => (/^[=+\-@\t\r]/.test(String(value ?? "")) ? `'${value}` : String(value ?? ""));
+
+  // Everything the quick filter can match: the reasons in full and every finding code that fired.
+  const searchText = (d) => [...(d.reasons || []), ...(d.findings || []).map((f) => f.code)].join(" ");
+
+  function updateGridCount() {
+    if (!decisionsApi) return; // AG Grid can report a model update while createGrid is still running
+    const total = state.decisions.length;
+    const shown = decisionsApi.getDisplayedRowCount();
+    $("#gridCount").textContent = shown === total ? `${total} request${total === 1 ? "" : "s"}` : `${shown} of ${total} shown`;
+    // This AG Grid only shows its no-rows overlay when there is no data at all, so a filter that hides
+    // every row gets it from here.
+    if (total > 0 && shown === 0) decisionsApi.showNoRowsOverlay();
+    else if (shown > 0) decisionsApi.hideOverlay();
+  }
+
   function createDecisionsGrid() {
     decisionsApi = agGrid.createGrid($("#decisionsGrid"), {
       columnDefs: [
-        { headerName: "Time", field: "created_at", width: 86, valueFormatter: (p) => fmtTime(p.value), sort: "desc" },
-        { headerName: "Outcome", field: "outcome", width: 104, cellRenderer: (p) => chip(p.value, String(p.value).toLowerCase()) },
-        { headerName: "Status", field: "status", flex: 0.7, minWidth: 112, cellRenderer: (p) => chip(humanize(p.value), "status") },
-        { headerName: "Merchant", field: "merchant_name", flex: 1, minWidth: 90 },
+        { headerName: "Time", field: "created_at", width: 86, valueFormatter: (p) => fmtTime(p.value), sort: "desc", filter: false },
+        { headerName: "Outcome", field: "outcome", width: 104, filter: false, enableCellChangeFlash: true,
+          cellRenderer: (p) => chip(p.value, String(p.value).toLowerCase()) },
+        { headerName: "Status", field: "status", flex: 0.7, minWidth: 112, enableCellChangeFlash: true,
+          cellRenderer: (p) => chip(humanize(p.value), "status") },
+        { headerName: "Merchant", field: "merchant_name", flex: 1, minWidth: 112 }, // room for the label and the filter icon
         { colId: "items", headerName: "Items", valueGetter: (p) => itemsSummary(p.data.items), flex: 1.2, minWidth: 90 },
-        { headerName: "Total", field: "total", width: 88, type: "rightAligned", comparator: numCompare,
+        { headerName: "Total", field: "total", width: 88, type: "rightAligned", comparator: numCompare, enableCellChangeFlash: true,
+          filter: "agNumberColumnFilter", filterValueGetter: (p) => Number(p.data.total),
           valueFormatter: (p) => fmtMoney(p.value, p.data && p.data.currency) },
-        { headerName: "Risk", field: "risk", width: 84, cellRenderer: (p) => riskBar(p.value), comparator: numCompare },
-        { colId: "why", headerName: "Why", valueGetter: (p) => (p.data.reasons || [])[0] || "No concerns", flex: 1.6, minWidth: 110 },
+        { headerName: "Risk", field: "risk", width: 84, cellRenderer: (p) => riskBar(p.value), comparator: numCompare,
+          filter: "agNumberColumnFilter", filterValueGetter: (p) => Math.round(Number(p.data.risk) * 100) }, // the 0 to 100 shown, not 0 to 1
+        { colId: "why", headerName: "Why", valueGetter: (p) => (p.data.reasons || [])[0] || "No concerns", flex: 1.6, minWidth: 110,
+          getQuickFilterText: (p) => searchText(p.data) },
+        { colId: "id", headerName: "Decision ID", field: "id", hide: true }, // only in the CSV export
       ],
-      defaultColDef: { sortable: true, resizable: true },
+      defaultColDef: { sortable: true, resizable: true, filter: true },
       getRowId: (p) => String(p.data.id),
       rowData: [],
       rowHeight: 38,
       suppressCellFocus: true,
       animateRows: false,
+      includeHiddenColumnsInQuickFilter: true, // on a phone Merchant, Items and Why are hidden but still searchable
+      isExternalFilterPresent: () => state.outcome !== "ALL",
+      doesExternalFilterPass: (node) => !!node.data && node.data.outcome === state.outcome,
+      onModelUpdated: updateGridCount,
       rowClassRules: { "row-selected": (p) => !!p.data && p.data.id === state.selectedId },
       onRowClicked: (event) => {
         state.selectedId = event.data.id;
         decisionsApi.redrawRows();
         renderDetail(event.data);
       },
-      overlayNoRowsTemplate: "<span>No purchase requests yet. Run <b>tollgate demo</b> in a terminal.</span>",
+      noRowsOverlayComponent: NoDecisionsOverlay,
     });
+  }
+
+  // Shown when the grid has nothing to draw: either no requests yet, or a filter that matches none.
+  class NoDecisionsOverlay {
+    init() {
+      this.gui = state.decisions.length
+        ? el("span", { text: "No decisions match this filter." })
+        : el("span", {}, "No purchase requests yet. Run ", el("b", { text: "tollgate demo" }), " in a terminal.");
+    }
+    getGui() {
+      return this.gui;
+    }
+  }
+
+  function exportCsv() {
+    const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z").replace(/[-:]/g, "");
+    decisionsApi.exportDataAsCsv({
+      fileName: `tollgate-decisions-${stamp}.csv`, // the rows as filtered and sorted on screen
+      allColumns: true,
+      processCellCallback: (p) => csvCell(p.value),
+    });
+  }
+
+  function wireDecisionToolbar() {
+    $("#decisionSearch").addEventListener("input", (event) => {
+      decisionsApi.setGridOption("quickFilterText", event.target.value);
+    });
+    const chips = [...document.querySelectorAll("#outcomeFilter button")];
+    for (const button of chips) {
+      button.addEventListener("click", () => {
+        state.outcome = button.dataset.outcome;
+        for (const other of chips) other.setAttribute("aria-pressed", String(other === button));
+        decisionsApi.onFilterChanged(); // tells the grid to ask doesExternalFilterPass again
+      });
+    }
+    $("#exportCsv").addEventListener("click", exportCsv);
   }
 
   // One block per finding: severity, code and who raised it on the first line, then the detail.
@@ -554,6 +619,7 @@
 
   async function start() {
     createDecisionsGrid();
+    wireDecisionToolbar();
     createMandatesGrid();
     createRedteamGrid();
     applyColumnLayout();

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 from typing import Any
 from urllib.parse import quote as urlquote
 
@@ -345,6 +347,41 @@ def test_dashboard_script_never_writes_html(client: TestClient) -> None:
     )
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
         assert sink not in code, sink
+
+
+def test_decision_log_toolbar_is_wired(client: TestClient) -> None:
+    page = client.get("/").text
+    for hook in ('id="decisionSearch"', 'id="outcomeFilter"', 'id="exportCsv"', 'data-outcome="DENY"', 'id="gridCount"'):
+        assert hook in page, hook
+    source = client.get("/static/dashboard.js").text
+    for feature in (
+        "quickFilterText",
+        "isExternalFilterPresent",
+        "doesExternalFilterPass",
+        "exportDataAsCsv",
+        "processCellCallback",
+        "enableCellChangeFlash",
+        "includeHiddenColumnsInQuickFilter",
+        "agNumberColumnFilter",
+        "filterValueGetter",
+    ):
+        assert feature in source, feature
+    # the export must go through the formula guard, never write raw cell values
+    assert re.search(r"processCellCallback:\s*\(p\)\s*=>\s*csvCell\(p\.value\)", source)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs Node to run the dashboard's CSV guard")
+def test_csv_export_guard_turns_spreadsheet_formulas_into_text(client: TestClient) -> None:
+    """Merchant and item names are attacker-controlled; a CSV cell that starts with = + - @ runs as a formula."""
+    source = client.get("/static/dashboard.js").text
+    line = re.search(r"^\s*const csvCell = (.+);\s*$", source, re.M)
+    assert line, "dashboard.js lost its csvCell guard"
+    inputs = ["=1+1", "+SUM(A1)", "-2+3", "@cmd", "\tx", "\rx", "plain", "", None, 0, "a=b", "'quoted", "1× USB-C cable"]
+    script = f"const f = {line.group(1)}; console.log(JSON.stringify({json.dumps(inputs)}.map(f)));"
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=True)
+    assert json.loads(result.stdout) == [
+        "'=1+1", "'+SUM(A1)", "'-2+3", "'@cmd", "'\tx", "'\rx", "plain", "", "", "0", "a=b", "'quoted", "1× USB-C cable",
+    ]
 
 
 def test_pages_escape_what_they_show(client: TestClient) -> None:

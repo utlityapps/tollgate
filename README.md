@@ -86,7 +86,7 @@ pip install -e ".[dev]"
 
 tollgate demo       # six scripted agent scenes against a private in-process server
 tollgate redteam    # the 26-scenario scorecard
-pytest -q           # 260+ tests, offline, a few seconds
+pytest -q           # 290+ tests, offline, a few seconds
 ```
 
 Watch it live in the dashboard:
@@ -101,6 +101,14 @@ public demo token. Click a row to see the findings, the judge's verdict and the 
 Approve / Deny buttons, and a captured payment has a two-tap Refund button. The Red team tab scores every
 attack on first open and charts how many got through, and how many dollars were lost, as each defense is
 added. `make help` lists shortcuts.
+
+The decision log is an AG Grid with a search box (it also matches finding codes such as
+`INJECTION_OVERRIDE_PRIOR`), outcome chips, column filters (text on Merchant, numbers on Total and Risk), and
+cells that flash when a live refresh changes them. **Export CSV** saves the rows as filtered and sorted on
+screen. Merchant and item names are attacker-controlled, so the export writes any cell that starts with `=`,
+`+`, `-` or `@` as text, and a test runs that guard.
+
+![Decision log filtered by a search and the Deny chip, with AG Grid's number filter open on Total](docs/img/dashboard-filter.png)
 
 Run the demo with a real Claude agent that shops through Tollgate (needs `ANTHROPIC_API_KEY`):
 
@@ -186,7 +194,7 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 
 | Part | Evidence |
 |---|---|
-| Quotes, policy, detectors, judge, engine, API, MCP, CLI, dashboard script | 260+ offline tests; they also pass on Python 3.11 and 3.13 |
+| Quotes, policy, detectors, judge, engine, API, MCP, CLI, dashboard script | 290+ offline tests; they also pass on Python 3.11 and 3.13 |
 | PayPal Orders v2 client (create, get, capture, refund, retries, idempotency, 401 refresh, webhook verification) | Contract tests against a mocked HTTP transport |
 | Order tampering between approval and capture | Tested with the mock backend's `tamper_amount` hook |
 | Docker image (the one `render.yaml` deploys) | Built in CI on every push; the container serves the dashboard and the scripted demo runs against it |
@@ -215,7 +223,7 @@ src/tollgate/
   mcp_server.py   MCP tools          gateway.py   local and HTTP gateways
   redteam.py      26-scenario scorecard              agent_demo.py  scripted and Claude-driven demo
   static/         dashboard (AG Grid + AG Charts Community, vendored, MIT)
-tests/            260+ tests          docs/   threat model and dashboard screenshots
+tests/            290+ tests          docs/   threat model and dashboard screenshots
 ```
 
 ## License

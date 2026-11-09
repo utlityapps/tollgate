@@ -36,7 +36,20 @@
     </nav>
 
     <section id="tab-decisions" class="panel">
-      <div id="decisionsGrid" class="ag-theme-quartz grid"></div>
+      <div id="decisionsPane" class="pane">
+        <div class="gridbar" role="toolbar" aria-label="Filter and export the decision log">
+          <input id="decisionSearch" type="search" placeholder="Search decisions" aria-label="Search decisions" autocomplete="off">
+          <div id="outcomeFilter" class="seg" role="group" aria-label="Show only one outcome">
+            <button type="button" data-outcome="ALL" aria-pressed="true">All</button>
+            <button type="button" data-outcome="APPROVE" aria-pressed="false">Approve</button>
+            <button type="button" data-outcome="ESCALATE" aria-pressed="false">Escalate</button>
+            <button type="button" data-outcome="DENY" aria-pressed="false">Deny</button>
+          </div>
+          <span id="gridCount" class="count muted" aria-live="polite"></span>
+          <button type="button" id="exportCsv">Export CSV</button>
+        </div>
+        <div id="decisionsGrid" class="ag-theme-quartz grid"></div>
+      </div>
       <aside id="detail" class="detail" aria-live="polite"></aside>
       <div id="firedCard" class="card">
         <h3 class="charttitle">What flagged these requests</h3>
