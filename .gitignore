@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets and local state: never commit these
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.sqlite3
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Scratch
+node_modules/
+*.log
