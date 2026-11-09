@@ -340,6 +340,104 @@ def test_webhook_refund_updates_the_decision(world: Any) -> None:
     assert world.engine.get_decision(d.id).status == "refunded"
 
 
+# --- refunds ----------------------------------------------------------------------------
+
+
+def test_owner_can_refund_a_captured_payment(world: Any) -> None:
+    d = world.pay(world.buy("p_usbc_cable"))
+    assert world.engine.stats()["approved_usd"] == "12.00"
+
+    refunded = world.engine.refund(d.id, "alex", "bought by mistake")
+    assert refunded.status == "refunded" and refunded.refund_id and refunded.capture_id == d.capture_id
+    assert refunded.events[-1]["type"] == "refunded" and "alex" in refunded.events[-1]["detail"]
+    assert world.payments.get_order(d.paypal_order_id).capture_status == "REFUNDED"
+    stats = world.engine.stats()
+    assert (stats["approved_usd"], stats["refunded_usd"]) == ("0.00", "12.00")
+    assert world.engine.refund(d.id).refund_id == refunded.refund_id  # a repeat click is harmless
+
+
+def test_a_refund_frees_the_daily_limit(world: Any) -> None:
+    mandate = world.new_mandate(daily_limit="20", per_order_limit="20", auto_approve_below="20")
+    first = world.pay(world.buy("p_usbc_cable", mandate=mandate))  # $12 of $20
+    blocked = world.buy("p_usbc_cable", mandate=mandate)  # $12 more would be $24
+    assert blocked.outcome is Outcome.DENY and "DAILY_LIMIT" in codes(blocked)
+    world.engine.refund(first.id)
+    assert world.buy("p_usbc_cable", mandate=mandate).outcome is Outcome.APPROVE
+
+
+@pytest.mark.parametrize("stage", ["pending_review", "order_created", "denied", "human_denied"])
+def test_only_a_captured_payment_can_be_refunded(world: Any, stage: str) -> None:
+    if stage == "pending_review":
+        d = world.buy("p_desk_lamp")
+    elif stage == "order_created":
+        d = world.buy("p_usbc_cable")
+    elif stage == "denied":
+        d = world.buy("p_desk_lamp", 4)
+    else:
+        d = world.engine.human_deny(world.buy("p_desk_lamp").id)
+    assert d.status == stage
+    with pytest.raises(EngineError, match="cannot refund"):
+        world.engine.refund(d.id)
+    assert world.engine.get_decision(d.id).status == stage
+
+
+def test_unknown_decision_cannot_be_refunded(world: Any) -> None:
+    with pytest.raises(NotFound):
+        world.engine.refund("dec_nope")
+
+
+def test_a_paypal_refusal_leaves_the_payment_captured_and_can_be_retried(world: Any) -> None:
+    d = world.pay(world.buy("p_usbc_cable"))
+    real = world.payments.refund_capture
+    request_ids: list[str] = []
+    outage = {"on": True}
+
+    def flaky(capture_id: str, **kwargs: Any) -> Any:
+        request_ids.append(kwargs["request_id"])
+        if outage["on"]:
+            raise PayPalError("INSTRUMENT_DECLINED: try later", status=422)
+        return real(capture_id, **kwargs)
+
+    world.payments.refund_capture = flaky
+    with pytest.raises(EngineError, match="PayPal refused the refund"):
+        world.engine.refund(d.id)
+    failed = world.engine.get_decision(d.id)
+    assert failed.status == "captured" and failed.refund_id is None
+    assert failed.events[-1]["type"] == "refund_failed"
+
+    outage["on"] = False  # PayPal recovers; the retry must use a fresh request id
+    assert world.engine.refund(d.id).status == "refunded"
+    assert request_ids == [f"tg-refund-{d.id}-1", f"tg-refund-{d.id}-2"]
+
+
+@pytest.mark.parametrize("answer", [("FAILED", "12.00"), ("CANCELLED", "12.00"), ("COMPLETED", "1.00")])
+def test_a_refund_that_did_not_happen_is_not_recorded_as_one(world: Any, answer: tuple[str, str]) -> None:
+    from tollgate.paypal import PayPalRefund
+
+    d = world.pay(world.buy("p_usbc_cable"))
+    status, amount = answer
+    world.payments.refund_capture = lambda *a, **k: PayPalRefund("R1", status, Decimal(amount), "USD")
+    with pytest.raises(EngineError, match="did not complete"):
+        world.engine.refund(d.id)
+    after = world.engine.get_decision(d.id)
+    assert after.status == "captured" and after.refund_id is None
+
+
+def test_a_pending_refund_counts_and_the_webhook_does_not_log_it_twice(world: Any) -> None:
+    from tollgate.paypal import PayPalRefund
+
+    d = world.pay(world.buy("p_usbc_cable"))
+    world.payments.refund_capture = lambda *a, **k: PayPalRefund("R1", "PENDING", Decimal("12.00"), "USD")
+    assert world.engine.refund(d.id).status == "refunded"
+    event = {
+        "event_type": "PAYMENT.CAPTURE.REFUNDED",
+        "resource": {"supplementary_data": {"related_ids": {"order_id": d.paypal_order_id}}},
+    }
+    assert world.engine.apply_webhook(event) == {"handled": True, "status": "refunded"}
+    types = [e["type"] for e in world.engine.get_decision(d.id).events]
+    assert types.count("refunded") == 1 and "payment_capture_refunded" not in types
+
+
 def test_webhooks_for_unknown_orders_or_events_are_ignored(world: Any) -> None:
     unknown = {"event_type": "CHECKOUT.ORDER.APPROVED", "resource": {"id": "MOCK-NOPE"}}
     assert world.engine.apply_webhook(unknown)["handled"] is False

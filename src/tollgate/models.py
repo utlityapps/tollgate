@@ -127,5 +127,6 @@ class Decision(BaseModel):
     justification: str = ""
     paypal_order_id: str | None = None
     capture_id: str | None = None
+    refund_id: str | None = None
     approve_url: str | None = None
     events: list[dict[str, str]] = Field(default_factory=list)

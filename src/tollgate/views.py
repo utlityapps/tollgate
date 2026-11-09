@@ -81,6 +81,8 @@ _NEXT_STEP = {
     "denied": "Do not retry with the same quotes. Tell the owner what was blocked and why.",
     "human_denied": "The owner declined this order. Do not retry it.",
     "captured": "Payment complete. Nothing more to do.",
+    "refunded": "The owner got this payment back. Do not buy it again unless asked.",
+    "reversed": "The payment was reversed by PayPal. Tell the owner; do not retry on your own.",
     "payment_error": "The payment provider failed. Tell the owner; do not retry on your own.",
     "capture_blocked": "Payment was stopped because it did not match the approved order.",
 }

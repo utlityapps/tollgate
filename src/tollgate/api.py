@@ -197,6 +197,11 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         body = body or ReviewBody()
         return admin_view(call(engine.human_deny, decision_id, body.reviewer, body.note))
 
+    @app.post("/api/decisions/{decision_id}/refund", dependencies=[admin_only])
+    def refund_decision(decision_id: str, body: ReviewBody | None = None) -> dict[str, Any]:
+        body = body or ReviewBody()
+        return admin_view(call(engine.refund, decision_id, body.reviewer, body.note))
+
     @app.get("/api/stats", dependencies=[admin_only])
     def stats() -> dict[str, Any]:
         return engine.stats()

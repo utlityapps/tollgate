@@ -203,6 +203,69 @@ def test_capture_parses_the_capture() -> None:
     assert capture.headers["content-type"].startswith("application/json")
 
 
+REFUND = {
+    "id": "1JU08902781691411",
+    "status": "COMPLETED",
+    "amount": {"currency_code": "USD", "value": "12.00"},
+}
+
+
+def test_refund_sends_the_right_request_and_parses_the_answer() -> None:
+    rec = Recorder(
+        {
+            "/v1/oauth2/token": token_ok,
+            "/v2/payments/captures/CAP123/refund": lambda r: httpx.Response(201, json=REFUND),
+        }
+    )
+    refund = rec.client().refund_capture(
+        "CAP123", request_id="tg-refund-dec_1-1", amount=Decimal("12"), currency="USD", note="Changed my mind"
+    )
+    assert (refund.id, refund.status, refund.amount, refund.currency) == (
+        "1JU08902781691411", "COMPLETED", Decimal("12.00"), "USD"
+    )
+    sent = rec.requests[-1]
+    assert sent.method == "POST" and sent.headers["paypal-request-id"] == "tg-refund-dec_1-1"
+    assert sent.headers["prefer"] == "return=representation"
+    assert json.loads(sent.content) == {
+        "amount": {"currency_code": "USD", "value": "12.00"},
+        "note_to_payer": "Changed my mind",
+    }
+
+
+def test_refund_without_a_note_and_with_a_minimal_response() -> None:
+    minimal = {"id": "R1", "status": "PENDING"}  # PayPal's minimal representation has no amount
+    rec = Recorder(
+        {
+            "/v1/oauth2/token": token_ok,
+            "/v2/payments/captures/CAP123/refund": lambda r: httpx.Response(201, json=minimal),
+        }
+    )
+    refund = rec.client().refund_capture("CAP123", request_id="r", amount=Decimal("12.00"), currency="USD")
+    assert refund.status == "PENDING" and refund.amount == Decimal("12.00") and refund.currency == "USD"
+    assert "note_to_payer" not in json.loads(rec.requests[-1].content)
+
+
+def test_refund_errors_carry_status_and_debug_id() -> None:
+    error = {"name": "CAPTURE_FULLY_REFUNDED", "message": "Already refunded.", "debug_id": "dbg-9"}
+    rec = Recorder(
+        {
+            "/v1/oauth2/token": token_ok,
+            "/v2/payments/captures/CAP123/refund": lambda r: httpx.Response(422, json=error),
+        }
+    )
+    with pytest.raises(PayPalError, match="CAPTURE_FULLY_REFUNDED") as info:
+        rec.client().refund_capture("CAP123", request_id="r", amount=Decimal("12"), currency="USD")
+    assert info.value.status == 422 and info.value.debug_id == "dbg-9"
+
+
+def test_capture_ids_are_validated_before_they_reach_a_url() -> None:
+    rec = Recorder({})
+    for bad in ("../../v1/oauth2/token", "abc", "CAP?x=1", ""):
+        with pytest.raises(PayPalError, match="invalid PayPal capture id"):
+            rec.client().refund_capture(bad, request_id="r", amount=Decimal("1"), currency="USD")
+    assert rec.requests == []
+
+
 def test_order_ids_are_validated_before_they_reach_a_url() -> None:
     rec = Recorder({})
     client = rec.client()
@@ -313,3 +376,34 @@ def test_mock_cancel_and_tamper() -> None:
     assert mock.cancel(order.id).status == "VOIDED"
     with pytest.raises(PayPalError):
         mock.approve(order.id)
+
+
+def mock_captured(mock: MockPayPal) -> Any:
+    order = mock_order(mock)
+    mock.approve(order.id)
+    return mock.capture_order(order.id, request_id="c1")
+
+
+def test_mock_refund_is_full_idempotent_and_only_once() -> None:
+    mock = MockPayPal()
+    done = mock_captured(mock)
+    refund = mock.refund_capture(done.capture_id, request_id="rf1", amount=Decimal("12.00"), currency="USD")
+    assert refund.status == "COMPLETED" and refund.amount == Decimal("12.00")
+    assert mock.get_order(done.id).capture_status == "REFUNDED"
+    again = mock.refund_capture(done.capture_id, request_id="rf1", amount=Decimal("12.00"), currency="USD")
+    assert again.id == refund.id  # same request id, same refund
+    with pytest.raises(PayPalError, match="CAPTURE_FULLY_REFUNDED"):
+        mock.refund_capture(done.capture_id, request_id="rf2", amount=Decimal("12.00"), currency="USD")
+
+
+def test_mock_refund_rejects_unknown_captures_and_wrong_amounts() -> None:
+    mock = MockPayPal()
+    done = mock_captured(mock)
+    with pytest.raises(PayPalError) as info:
+        mock.refund_capture("CAP-NOPE", request_id="rf1", amount=Decimal("12.00"), currency="USD")
+    assert info.value.status == 404
+    with pytest.raises(PayPalError, match="REFUND_AMOUNT_EXCEEDS_CAPTURE"):
+        mock.refund_capture(done.capture_id, request_id="rf2", amount=Decimal("99.00"), currency="USD")
+    with pytest.raises(PayPalError, match="REFUND_AMOUNT_EXCEEDS_CAPTURE"):
+        mock.refund_capture(done.capture_id, request_id="rf3", amount=Decimal("12.00"), currency="EUR")
+    assert mock.get_order(done.id).capture_status == "COMPLETED"  # nothing was refunded

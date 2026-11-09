@@ -569,6 +569,47 @@ class Engine:
         self.store.save_decision(d)
         return d
 
+    def refund(self, decision_id: str, reviewer: str = "admin", note: str = "") -> Decision:
+        """Give a captured payment back. Humans only: no agent route reaches this."""
+        with self._lock:
+            d = self.get_decision(decision_id)
+            if d.status == "refunded":
+                return d  # already done, so a repeat click is harmless
+            if d.status != "captured" or not d.capture_id:
+                raise EngineError(f"cannot refund: decision is '{d.status}', not 'captured'")
+            attempt = 1 + sum(1 for e in d.events if e["type"] == "refund_failed")
+            try:
+                refund = self.payments.refund_capture(
+                    d.capture_id,
+                    request_id=f"tg-refund-{d.id}-{attempt}",
+                    amount=d.total,
+                    currency=d.currency,
+                    note=_clip(note, 120) or "Refund requested by the owner",
+                )
+            except PayPalError as exc:
+                self._event(d, "refund_failed", str(exc))
+                self.store.save_decision(d)
+                raise EngineError(f"PayPal refused the refund: {exc}") from exc
+            if (
+                refund.status not in ("COMPLETED", "PENDING")
+                or refund.amount != d.total
+                or refund.currency != d.currency
+            ):
+                self._event(
+                    d, "refund_failed", f"PayPal returned {refund.status} {refund.amount} {refund.currency}"
+                )
+                self.store.save_decision(d)
+                raise EngineError(f"the refund did not complete (PayPal status {refund.status})")
+            d.status = "refunded"
+            d.refund_id = refund.id
+            self._event(
+                d,
+                "refunded",
+                f"{_clip(reviewer, 60)}: {_clip(note, 120)} (refund {refund.id}, {refund.status.lower()})",
+            )
+            self.store.save_decision(d)
+            return d
+
     def refresh(self, decision_id: str) -> Decision:
         """Poll: capture the order if the buyer approved it since we last looked."""
         with self._lock:
@@ -603,13 +644,15 @@ class Engine:
                     return {"handled": False, "reason": str(exc)}
             elif kind in ("PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED"):
                 decision = self.get_decision(decision.id)
-                decision.status = {
+                new_status = {
                     "PAYMENT.CAPTURE.DENIED": "capture_failed",
                     "PAYMENT.CAPTURE.REFUNDED": "refunded",
                     "PAYMENT.CAPTURE.REVERSED": "reversed",
                 }[kind]
-                self._event(decision, kind.lower().replace(".", "_"), "reported by PayPal webhook")
-                self.store.save_decision(decision)
+                if decision.status != new_status:  # our own refund already set it: don't log it twice
+                    decision.status = new_status
+                    self._event(decision, kind.lower().replace(".", "_"), "reported by PayPal webhook")
+                    self.store.save_decision(decision)
             else:
                 return {"handled": False, "reason": f"ignored {kind or 'event'}"}
         return {"handled": True, "status": decision.status}
@@ -628,12 +671,14 @@ class Engine:
         decisions = self.store.list_decisions(1000)
         by_outcome = {o.value: 0 for o in Outcome}
         by_status: dict[str, int] = {}
-        approved = blocked = held = ZERO
+        approved = blocked = held = refunded = ZERO
         for d in decisions:
             by_outcome[d.outcome.value] += 1
             by_status[d.status] = by_status.get(d.status, 0) + 1
             if d.status in ("order_created", "captured"):
                 approved += d.total
+            elif d.status in ("refunded", "reversed"):
+                refunded += d.total
             elif d.status == "pending_review":
                 held += d.total
             elif d.outcome is Outcome.DENY or d.status == "human_denied":
@@ -645,6 +690,7 @@ class Engine:
             "approved_usd": str(money(approved)),
             "blocked_usd": str(money(blocked)),
             "held_usd": str(money(held)),
+            "refunded_usd": str(money(refunded)),
             "pending_review": by_status.get("pending_review", 0),
         }
 

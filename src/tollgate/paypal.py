@@ -86,6 +86,24 @@ class PayPalOrder:
         )
 
 
+@dataclass(frozen=True)
+class PayPalRefund:
+    id: str
+    status: str  # COMPLETED, PENDING, FAILED or CANCELLED
+    amount: Decimal
+    currency: str
+
+    @classmethod
+    def from_api(cls, data: Mapping[str, Any], *, fallback_amount: Decimal, fallback_currency: str) -> "PayPalRefund":
+        amount = data.get("amount") or {}
+        return cls(
+            id=str(data.get("id", "")),
+            status=str(data.get("status", "")),
+            amount=_amount(amount["value"]) if "value" in amount else fallback_amount,
+            currency=str(amount.get("currency_code") or fallback_currency),
+        )
+
+
 class PaymentsBackend(Protocol):
     name: str
 
@@ -104,6 +122,10 @@ class PaymentsBackend(Protocol):
     def get_order(self, order_id: str) -> PayPalOrder: ...
 
     def capture_order(self, order_id: str, *, request_id: str) -> PayPalOrder: ...
+
+    def refund_capture(
+        self, capture_id: str, *, request_id: str, amount: Decimal, currency: str, note: str = ""
+    ) -> PayPalRefund: ...
 
     def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool: ...
 
@@ -299,6 +321,25 @@ class PayPalClient:
         )
         return PayPalOrder.from_api(data)
 
+    def refund_capture(
+        self, capture_id: str, *, request_id: str, amount: Decimal, currency: str, note: str = ""
+    ) -> PayPalRefund:
+        """Refund a captured payment through the Payments v2 API (a full refund of `amount`)."""
+        if not _ORDER_ID.match(capture_id):
+            raise PayPalError("invalid PayPal capture id")
+        value = money(amount)
+        body: dict[str, Any] = {"amount": {"currency_code": currency, "value": str(value)}}
+        if note:
+            body["note_to_payer"] = note[:255]
+        data = self._api(
+            "POST",
+            f"/v2/payments/captures/{capture_id}/refund",
+            json_body=body,
+            request_id=request_id,
+            prefer_representation=True,
+        )
+        return PayPalRefund.from_api(data, fallback_amount=value, fallback_currency=currency)
+
     def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
         """Ask PayPal whether a webhook is genuine. Fails closed on anything unexpected."""
         if not self._webhook_id:
@@ -357,6 +398,7 @@ class MockPayPal:
         self._base = public_base_url.rstrip("/")
         self._orders: dict[str, dict[str, Any]] = {}
         self._by_request: dict[str, str] = {}
+        self._refunds: dict[str, PayPalRefund] = {}
         self._lock = threading.RLock()
 
     def _view(self, order_id: str) -> PayPalOrder:
@@ -371,7 +413,7 @@ class MockPayPal:
             custom_id=o["custom_id"],
             approve_url=f"{self._base}/mock/pay/{order_id}" if waiting else None,
             capture_id=o["capture_id"],
-            capture_status="COMPLETED" if done else None,
+            capture_status=("REFUNDED" if o.get("refunded") else "COMPLETED") if done else None,
             capture_amount=o["amount"] if done else None,
         )
 
@@ -440,6 +482,30 @@ class MockPayPal:
             order["status"] = "COMPLETED"
             order["capture_id"] = "CAP-" + secrets.token_hex(5).upper()
             return self._view(order_id)
+
+    def refund_capture(
+        self, capture_id: str, *, request_id: str, amount: Decimal, currency: str, note: str = ""
+    ) -> PayPalRefund:
+        """Full refunds only, like the way Tollgate uses the real API. Idempotent per request id."""
+        with self._lock:
+            if request_id in self._refunds:
+                return self._refunds[request_id]
+            order = next((o for o in self._orders.values() if o["capture_id"] == capture_id), None)
+            if order is None:
+                raise PayPalError("RESOURCE_NOT_FOUND: no such capture", status=404)
+            if order.get("refunded"):
+                raise PayPalError("CAPTURE_FULLY_REFUNDED: this capture was already refunded", status=422)
+            value = money(amount)
+            if value != order["amount"] or currency != order["currency"]:
+                raise PayPalError(
+                    "REFUND_AMOUNT_EXCEEDS_CAPTURE: the mock only supports full refunds", status=422
+                )
+            order["refunded"] = True
+            refund = PayPalRefund(
+                id="REF-" + secrets.token_hex(5).upper(), status="COMPLETED", amount=value, currency=currency
+            )
+            self._refunds[request_id] = refund
+            return refund
 
     def tamper_amount(self, order_id: str, amount: Any) -> None:
         """Test hook: change an order's amount behind Tollgate's back."""
