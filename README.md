@@ -116,7 +116,9 @@ tollgate demo --llm
 3. `tollgate smoke` creates a real $1.00 sandbox order, prints the approval link, waits while you approve
    it as a sandbox buyer, then captures it. If this passes, your keys and the whole PayPal path work.
 4. `tollgate serve`. The header now says **PayPal sandbox**. Run `tollgate demo --url http://127.0.0.1:8000`;
-   approved and human-approved orders become real sandbox orders with an approval link.
+   approved and human-approved orders become real sandbox orders with an approval link. The demo waits for
+   you to approve as the sandbox buyer only on the last order it creates (`--wait-all-payments` waits on
+   every order).
 5. Optional: add a sandbox webhook pointing at `https://<your-host>/webhooks/paypal` and set
    `PAYPAL_WEBHOOK_ID`. Signatures are verified through PayPal before any event is used, and amounts in
    the webhook body are never trusted: the order is fetched again.

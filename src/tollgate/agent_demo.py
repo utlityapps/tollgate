@@ -100,6 +100,7 @@ class Demo:
         pause: float,
         color: bool,
         out: Callable[[str], None] = print,
+        wait_all_payments: bool = False,
     ) -> None:
         self.agent = agent
         self.admin = admin
@@ -107,10 +108,12 @@ class Demo:
         self.pause = pause
         self.color = color
         self.out = out
+        self.wait_all_payments = wait_all_payments
         self.mock = admin.health().get("payments") == "mock"
         self.mandate_id = ""
         self.open_mandate_id = ""
         self.scenes_run = 0
+        self.last_payment_scene: str | None = None
 
     # --- printing --------------------------------------------------------------------
     def paint(self, code: str, text: str) -> str:
@@ -167,8 +170,13 @@ class Demo:
                 return status
             time.sleep(1.0)
 
-    def finish_payment(self, d: dict[str, Any]) -> None:
-        """Buyer approval, then capture. Automatic with mock payments, manual in the sandbox."""
+    def finish_payment(self, d: dict[str, Any], scene: str) -> None:
+        """Buyer approval, then capture. Automatic with mock payments.
+
+        In the sandbox the buyer approves by hand inside PayPal, so the demo waits only on the last
+        order of the run (every order with --wait-all-payments). Earlier orders stay open in PayPal
+        and their links are printed, which keeps a recorded run short.
+        """
         url = d.get("approve_url")
         if not url:
             return
@@ -176,9 +184,12 @@ class Demo:
             self.owner_says("approves the payment on the (mock) payment page")
             self.admin.buyer_approves(url.rstrip("/").rsplit("/", 1)[-1])
             final = self.agent.status(d["id"])
-        else:
+        elif self.wait_all_payments or scene == self.last_payment_scene:
             self.owner_says(f"open this link, sign in with a SANDBOX buyer, approve:\n             {url}")
             final = self.wait_for(d["id"], {"captured", "capture_blocked", "capture_failed"}, 180)
+        else:
+            self.owner_says(f"leaves this PayPal sandbox order open for the buyer (not waiting):\n             {url}")
+            return
         mark = "paid" if final["status"] == "captured" else final["status"].replace("_", " ")
         self.say(f"  {self.paint('2', 'tollgate')} payment {self.paint('1;32' if mark == 'paid' else '33', mark)}")
 
@@ -190,7 +201,7 @@ class Demo:
         quote = self.quote("p_usbc_cable")
         d = self.buy([quote["quote"]], "Cheapest 100 W cable that fits the owner's laptop")
         self.show(d)
-        self.finish_payment(d)
+        self.finish_payment(d, "honest")
 
     def poison(self) -> None:
         self.scene("A poisoned listing orders gift cards")
@@ -249,7 +260,7 @@ class Demo:
         status = self.wait_for(d["id"], {"order_created", "human_denied", "denied"}, 120 if not self.auto else 5)
         self.say(f"  {self.paint('2', 'tollgate')} {status['status'].replace('_', ' ')}")
         if status["status"] == "order_created":
-            self.finish_payment(status)
+            self.finish_payment(status, "human")
 
     def lookalike(self) -> None:
         self.scene("A cheaper clone of a trusted merchant")
@@ -272,6 +283,8 @@ class Demo:
             "signs a mandate: cables and office supplies, max $60 per order, $150 a day, "
             "auto-approve under $25"
         )
+        paying = [name for name in scenes if name in ("honest", "human")]
+        self.last_payment_scene = paying[-1] if paying else None
         for name in scenes:
             getattr(self, name)()
         self.summary()
@@ -417,6 +430,7 @@ def run_demo(
     auto: bool = False,
     pause: float = 0.0,
     color: bool | None = None,
+    wait_all_payments: bool = False,
 ) -> int:
     chosen = scenes or list(ALL_SCENES)
     unknown = [s for s in chosen if s not in ALL_SCENES]
@@ -434,7 +448,10 @@ def run_demo(
     admin = Admin(client, admin_token)
     gateway = HttpGateway(url or "http://testserver", agent_token, client=client)
     try:
-        demo = Demo(gateway, admin, auto=auto or (not url), pause=pause, color=use_color)
+        demo = Demo(
+            gateway, admin, auto=auto or (not url), pause=pause, color=use_color,
+            wait_all_payments=wait_all_payments,
+        )
         if llm:
             key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
             if not key:

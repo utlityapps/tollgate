@@ -55,6 +55,7 @@ def _demo(args: argparse.Namespace) -> int:
         auto=args.auto,
         pause=args.pause,
         color=False if args.no_color else None,
+        wait_all_payments=args.wait_all_payments,
     )
 
 
@@ -136,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--llm", action="store_true", help="use a real Claude agent (needs ANTHROPIC_API_KEY)")
     demo.add_argument("--auto", action="store_true", help="approve held orders automatically")
     demo.add_argument("--pause", type=float, default=0.0, help="seconds between scenes (for recording)")
+    demo.add_argument(
+        "--wait-all-payments",
+        action="store_true",
+        help="PayPal sandbox only: wait for the buyer on every order (default: only the last one)",
+    )
     demo.add_argument("--no-color", action="store_true")
     demo.set_defaults(func=_demo)
 

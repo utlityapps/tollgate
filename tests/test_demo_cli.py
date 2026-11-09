@@ -8,8 +8,8 @@ from typing import Any, Callable
 import pytest
 
 from tollgate import cli, catalog
-from tollgate.agent_demo import ALL_SCENES, dispatch_tool, run_demo, run_llm_agent
-from tollgate.gateway import LocalGateway
+from tollgate.agent_demo import ALL_SCENES, Admin, Demo, dispatch_tool, local_stack, run_demo, run_llm_agent
+from tollgate.gateway import HttpGateway, LocalGateway
 from tollgate.paypal import PayPalError, PayPalOrder
 
 Capture = pytest.CaptureFixture[str]
@@ -33,6 +33,75 @@ def test_a_single_scene_can_be_run(capsys: Capture) -> None:
     assert run_demo(scenes=["poison"], color=False) == 0
     out = capsys.readouterr().out
     assert "Scene 1: A poisoned listing" in out and "[DENY]" in out and "[APPROVE]" not in out
+
+
+def sandbox_demo(lines: list[str], **options: Any) -> tuple[Demo, list[str]]:
+    """A scripted demo whose payments behave like the PayPal sandbox: the buyer approves by hand."""
+    client, admin_token, agent_token = local_stack()
+    admin = Admin(client, admin_token)
+    gateway = HttpGateway("http://testserver", agent_token, client=client)
+    demo = Demo(gateway, admin, auto=True, pause=0, color=False, out=lines.append, **options)
+    demo.mock = False
+    waited: list[str] = []
+    real_wait = demo.wait_for
+
+    def wait_for(decision_id: str, statuses: set[str], seconds: float) -> dict[str, Any]:
+        if "captured" in statuses:  # the buyer's approval inside PayPal
+            waited.append(decision_id)
+            return {"status": "captured"}
+        return real_wait(decision_id, statuses, seconds)
+
+    demo.wait_for = wait_for  # type: ignore[method-assign]
+    return demo, waited
+
+
+def decision_ids_by_total(demo: Demo) -> dict[Decimal, str]:
+    return {Decimal(d["total"]): d["id"] for d in demo.admin.decisions()}
+
+
+def test_sandbox_demo_waits_for_the_buyer_only_on_the_last_order() -> None:
+    lines: list[str] = []
+    demo, waited = sandbox_demo(lines)
+    demo.run(["honest", "human"])
+    out = "\n".join(lines)
+    assert waited == [decision_ids_by_total(demo)[Decimal("48.00")]]  # the desk lamp, not the cable
+    assert out.count("leaves this PayPal sandbox order open") == 1
+    assert out.count("sign in with a SANDBOX buyer") == 1
+
+
+def test_sandbox_demo_can_wait_for_every_order() -> None:
+    lines: list[str] = []
+    demo, waited = sandbox_demo(lines, wait_all_payments=True)
+    demo.run(["honest", "human"])
+    ids = decision_ids_by_total(demo)
+    assert waited == [ids[Decimal("12.00")], ids[Decimal("48.00")]]
+    assert "leaves this PayPal sandbox order open" not in "\n".join(lines)
+
+
+def test_sandbox_demo_with_one_paying_scene_waits_for_it() -> None:
+    lines: list[str] = []
+    demo, waited = sandbox_demo(lines)
+    demo.run(["honest", "poison"])
+    assert waited == [decision_ids_by_total(demo)[Decimal("12.00")]]
+
+
+def test_sandbox_demo_without_paying_scenes_never_waits() -> None:
+    lines: list[str] = []
+    demo, waited = sandbox_demo(lines)
+    demo.run(["poison", "tamper"])
+    assert waited == [] and "sign in with a SANDBOX buyer" not in "\n".join(lines)
+
+
+def test_mock_demo_still_pays_every_order(capsys: Capture) -> None:
+    assert run_demo(scenes=["honest", "human"], color=False) == 0
+    out = capsys.readouterr().out
+    assert out.count("payment paid") == 2 and "leaves this PayPal sandbox order open" not in out
+
+
+def test_cli_demo_accepts_wait_all_payments(capsys: Capture) -> None:
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["demo", "--scenes", "honest", "--wait-all-payments", "--no-color"])
+    assert stop.value.code == 0 and "payment paid" in capsys.readouterr().out
 
 
 def test_unknown_scene_is_a_usage_error(capsys: Capture) -> None:
