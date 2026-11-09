@@ -30,7 +30,7 @@ tollgate-mcp = "tollgate.mcp_server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tollgate = ["static/*.html", "static/*.js", "static/*.css", "static/vendor/ag-grid/*"]
+tollgate = ["static/*.html", "static/*.js", "static/*.css", "static/vendor/ag-grid/*", "static/vendor/ag-charts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

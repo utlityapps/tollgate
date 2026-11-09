@@ -38,6 +38,11 @@
     <section id="tab-decisions" class="panel">
       <div id="decisionsGrid" class="ag-theme-quartz grid"></div>
       <aside id="detail" class="detail" aria-live="polite"></aside>
+      <div id="firedCard" class="card">
+        <h3 class="charttitle">What flagged these requests</h3>
+        <p class="chartsub muted">Requests per finding code, most common first</p>
+        <ul id="firedList" class="rank"></ul>
+      </div>
     </section>
 
     <section id="tab-mandates" class="panel stack" hidden>
@@ -61,8 +66,12 @@
     <section id="tab-redteam" class="panel stack" hidden>
       <div class="card">
         <h2>Red-team scorecard</h2>
-        <p class="muted">Replays every attack against throwaway engines at three defense levels. No network, no API keys, nothing touches your real data.</p>
+        <p class="muted">Replays every attack against throwaway engines at three defense levels, each adding one defense to the one before. No network, no API keys, nothing touches your real data.</p>
         <div class="actions"><button id="runRedteam" class="primary">Run red team</button><span id="rtHeadline" class="headline"></span></div>
+        <div class="charts">
+          <div id="rtChartSucceeded" class="chart" role="img" aria-label="Attacks that got through, by defense level"></div>
+          <div id="rtChartLost" class="chart" role="img" aria-label="Money lost, by defense level"></div>
+        </div>
         <table id="rtLevels" class="levels"></table>
       </div>
       <div id="redteamGrid" class="ag-theme-quartz grid tall"></div>
@@ -72,6 +81,7 @@
   <footer>Sandbox only. Listing text is shown as plain text and is never executed or rendered as HTML.</footer>
 
   <script src="/static/vendor/ag-grid/ag-grid-community.min.js"></script>
+  <script src="/static/vendor/ag-charts/ag-charts-community.min.js"></script>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>

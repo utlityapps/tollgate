@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -29,6 +30,7 @@ ADMIN_ONLY = [
     ("GET", "/api/decisions/dec_x", None),
     ("POST", "/api/decisions/dec_x/approve", None),
     ("POST", "/api/decisions/dec_x/deny", None),
+    ("POST", "/api/decisions/dec_x/refund", None),
     ("GET", "/api/stats", None),
     ("POST", "/api/redteam/run", None),
 ]
@@ -149,6 +151,22 @@ def test_held_order_needs_the_admin_token(client: TestClient, world: Any) -> Non
     assert ok.status_code == 200 and ok.json()["status"] == "order_created"
     assert client.post(url, headers=ADMIN).status_code == 409  # only once
     assert client.post("/api/decisions/dec_nope/approve", headers=ADMIN).status_code == 404
+
+
+def test_refund_endpoint_is_admin_only_and_only_for_captured_payments(client: TestClient, world: Any) -> None:
+    paid = world.pay(world.buy("p_usbc_cable"))
+    url = f"/api/decisions/{paid.id}/refund"
+    assert client.post(url, headers=AGENT).status_code == 401  # an agent can never claw money back
+    assert client.post("/api/decisions/dec_nope/refund", headers=ADMIN).status_code == 404
+    open_order = world.buy("p_notebook")  # approved but not paid yet
+    assert client.post(f"/api/decisions/{open_order.id}/refund", headers=ADMIN).status_code == 409
+    assert client.post(url, headers=ADMIN, json={"note": "x" * 500}).status_code == 422
+    ok = client.post(url, headers=ADMIN, json={"reviewer": "alex", "note": "mistake"})
+    assert ok.status_code == 200 and ok.json()["status"] == "refunded" and ok.json()["refund_id"]
+    assert client.get("/api/stats", headers=ADMIN).json()["refunded_usd"] == "12.00"
+    # the agent sees the outcome in its own fixed vocabulary
+    seen = client.get(f"/api/purchases/{paid.id}", headers=AGENT).json()
+    assert seen["status"] == "refunded" and "refund_id" not in seen
 
 
 def test_deny_endpoint_and_review_body_validation(client: TestClient, world: Any) -> None:
@@ -295,6 +313,29 @@ def test_vendored_ag_grid_is_served_locally(client: TestClient) -> None:
         assert client.get(path).status_code == 200, path
     license_text = client.get("/static/vendor/ag-grid/LICENSE.txt").text
     assert "MIT" in license_text
+
+
+def test_vendored_ag_charts_is_served_locally_and_loaded_before_the_dashboard(client: TestClient) -> None:
+    script = client.get("/static/vendor/ag-charts/ag-charts-community.min.js")
+    assert script.status_code == 200 and "javascript" in script.headers["content-type"]
+    assert "agCharts" in script.text[:2000]  # the UMD wrapper exposes the global the dashboard uses
+    license_text = client.get("/static/vendor/ag-charts/LICENSE.txt").text
+    assert "MIT" in license_text and "AG GRID" in license_text
+    page = client.get("/").text
+    order = [page.index(name) for name in ("ag-grid-community.min.js", "ag-charts-community.min.js", "/static/dashboard.js")]
+    assert order == sorted(order)  # both libraries must exist before the dashboard script runs
+
+
+VENDORED = {  # path under static/vendor -> sha256. Update both together when you upgrade a library.
+    "ag-grid/ag-grid-community.min.js": "b7b6654fc8dd387d370da3a3f84e2fd4ca9a1c95e2a0b9d3ac08ce858dcdea8f",  # 32.3.9
+    "ag-charts/ag-charts-community.min.js": "bb55974410690aa28266f4512dd6091f9ae882f810e16287f8da5f2ad7223277",  # 14.3.0
+}
+
+
+@pytest.mark.parametrize("name", sorted(VENDORED))
+def test_vendored_libraries_are_unmodified(client: TestClient, name: str) -> None:
+    served = client.get(f"/static/vendor/{name}").content
+    assert hashlib.sha256(served).hexdigest() == VENDORED[name], f"{name} changed; update VENDORED if on purpose"
 
 
 def test_dashboard_script_never_writes_html(client: TestClient) -> None:

@@ -17,8 +17,8 @@ anything that decides money.** Out of scope: an attacker who already holds the a
 
 | Party | Trusted for | Not trusted for |
 |---|---|---|
-| Owner (admin token, dashboard) | Setting the mandate, approving or denying held orders, revoking | n/a |
-| Agent (agent token) | Choosing a product, a quantity, and explaining why | Price, payee, amount, approvals |
+| Owner (admin token, dashboard) | Setting the mandate, approving or denying held orders, revoking, refunding a captured payment | n/a |
+| Agent (agent token) | Choosing a product, a quantity, and explaining why | Price, payee, amount, approvals, refunds |
 | Listing, review and email text | Nothing; it is data | Anything. Scanned, never obeyed |
 | PayPal | Order state and capture | Webhook bodies: the order is fetched again; signatures are verified through PayPal |
 | LLM judge | Adding suspicion | Denying. It can only escalate to a human |
@@ -37,8 +37,12 @@ anything that decides money.** Out of scope: an attacker who already holds the a
 5. **The agent never reads attacker text back.** Agent-facing responses use a fixed vocabulary of reasons.
    The full findings, including evidence snippets, go only to the admin view, which renders them as text.
 6. **Separate credentials.** The agent token can read the terms of its own mandate by id, but cannot list
-   mandates, read decisions, or approve anything.
-7. **Sandbox only by default.** Non-sandbox PayPal hosts, including look-alike hostnames, are refused unless
+   mandates, read decisions, approve or refund anything.
+7. **Refunds are owner-only and exact.** A refund can only follow a capture. It carries its own idempotency key
+   per attempt, must match the captured amount and currency, and is recorded only when PayPal reports it
+   `COMPLETED` or `PENDING`. A refused or mismatched refund leaves the payment `captured` and logs
+   `refund_failed`, so the books never claim money came back when it did not.
+8. **Sandbox only by default.** Non-sandbox PayPal hosts, including look-alike hostnames, are refused unless
    `TOLLGATE_ALLOW_LIVE=1`.
 
 ## Decision rule
@@ -112,7 +116,7 @@ These are real, and the tests document the first two on purpose.
    transport; `tollgate smoke` runs the same calls against the real sandbox with your keys.
 9. **The catalog is a simulation.** The agent API is generic, but no real marketplace is connected.
 
-Not covered at all: buyer account takeover, chargebacks and fraud scoring, KYC, merchant onboarding, and live money.
+Not covered at all: buyer account takeover, chargebacks, partial refunds and fraud scoring, KYC, merchant onboarding, and live money.
 
 ## Adding a detector
 

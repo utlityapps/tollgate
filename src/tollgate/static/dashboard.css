@@ -40,7 +40,12 @@ button:disabled { opacity: .55; cursor: default; }
 .tab.active { background: #fff; font-weight: 700; border-color: #8f9aa8; border-bottom-color: #fff; }
 .panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .panel[hidden], [hidden] { display: none !important; }
-@media (min-width: 1180px) { #tab-decisions { grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr); } }
+@media (min-width: 1180px) {
+  #tab-decisions { grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr); }
+  #decisionsGrid { grid-column: 1; grid-row: 1; }
+  #firedCard { grid-column: 1; grid-row: 2; }
+  #detail { grid-column: 2; grid-row: 1 / span 2; align-self: start; max-height: 704px; }
+}
 .ag-theme-quartz.grid { --ag-cell-horizontal-padding: 10px; } /* beats the theme styles AG Grid injects at runtime */
 .grid { height: 420px; width: 100%; } .grid.short { height: 260px; } .grid.tall { height: 640px; }
 .stack { grid-template-columns: minmax(0, 1fr); }
@@ -79,6 +84,18 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 .fhead .muted { font-size: 12px; }
 .fdetail { margin-top: 4px; word-break: break-word; }
 .evidence { display: block; margin-top: 4px; padding: 3px 6px; white-space: pre-wrap; word-break: break-word; }
+.chart { height: 250px; min-width: 0; }
+.charttitle { margin: 0; font-size: 14px; }
+.chartsub { margin: 2px 0 12px; font-size: 12px; }
+ul.rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+ul.rank li { display: grid; grid-template-columns: minmax(0, 15em) minmax(0, 1fr); align-items: center; gap: 2px 12px; }
+ul.rank code { color: var(--muted); overflow-wrap: anywhere; }
+ul.rank .track { display: flex; align-items: center; gap: 8px; min-width: 0; }
+ul.rank .fill { flex: none; max-width: calc(100% - 26px); height: 10px; border-radius: 0 4px 4px 0; background: #2a78d6; }
+ul.rank b { font-size: 12px; }
+ul.rank li.empty { display: block; }
+.chart .placeholder { display: flex; height: 100%; margin: 0; align-items: center; justify-content: center; color: var(--muted); text-align: center; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
 table.levels { width: 100%; border-collapse: collapse; margin-top: 12px; }
 table.levels th, table.levels td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; }
 table.levels th:first-child, table.levels td:first-child { text-align: left; }
@@ -99,4 +116,7 @@ table.levels tr.base td { color: var(--muted); } table.levels td.bad { color: va
   .grid { height: 340px; }
   .detail { max-height: none; }
   .btnrow button { flex: 1 1 100%; }
+  ul.rank li { grid-template-columns: minmax(0, 1fr); }
+  table.levels { display: block; overflow-x: auto; }
+  table.levels th, table.levels td { white-space: nowrap; }
 }

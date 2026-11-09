@@ -23,18 +23,18 @@ immune. It makes sure that **what the model says is not what decides the payment
 ## How it works
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["AI shopping agent"] -->|"MCP tools or REST"| G["Tollgate gateway"]
-    G --> Q["1. Signed single-use quotes<br/>price, merchant and mandate pinned"]
-    Q --> M["2. Mandate policy<br/>limits, categories, merchants"]
-    M --> D["3. Deterministic detectors<br/>hidden text, injections, look-alikes"]
-    D --> J["4. Judge: rules plus optional Claude<br/>can only make a decision stricter"]
+    G --> Q["1. Signed single-use quotes"]
+    Q --> M["2. Mandate policy"]
+    M --> D["3. Deterministic detectors"]
+    D --> J["4. Judge: rules plus optional Claude"]
     J -->|APPROVE| P["PayPal order created"]
     J -->|ESCALATE| H["5. Human review in the dashboard"]
     J -->|DENY| X["Blocked and logged"]
     H -->|approved| P
     P --> B["Buyer approves inside PayPal"]
-    B --> C["Re-verify the order, then capture"]
+    B --> C["Re-verify order, then capture"]
 ```
 
 | Layer | What it does | Who can overrule it |
@@ -43,7 +43,7 @@ flowchart TD
 | **2. Mandate** | The owner's policy: per-order and daily limits, auto-approve threshold, allowed categories and merchants, item cap, expiry, revocation. | The owner. |
 | **3. Detectors** | Deterministic checks on all untrusted text: invisible and tag Unicode, bidi controls, homoglyphs, zero-width obfuscation, HTML comments, hidden-styled text, base64 payloads, instruction and impersonation patterns, look-alike merchants and brands, order velocity. | Not the agent. A DENY is final; only held (ESCALATE) orders ever reach a human. |
 | **4. Judge** | A rule-based judge always runs; a Claude judge is optional. It looks for off-task buying, odd quantities, and "the page told me to". | It can only make a decision **stricter**. Only rules can DENY; the LLM can only escalate to a human. |
-| **5. Human checkpoints** | Above the auto-approve limit, the order waits in the dashboard, and limits are re-checked when the owner approves it. Even approved orders still need the buyer to approve inside PayPal, and the PayPal order (amount, currency, custom id) is re-verified just before capture. | The owner and the buyer. |
+| **5. Human checkpoints** | Above the auto-approve limit, the order waits in the dashboard, and limits are re-checked when the owner approves it. Even approved orders still need the buyer to approve inside PayPal, and the PayPal order (amount, currency, custom id) is re-verified just before capture. After capture, only the owner can refund it. | The owner and the buyer. The agent can neither approve nor refund. |
 
 Outcomes are `APPROVE`, `ESCALATE` (a human decides) or `DENY`. The agent sees only a fixed vocabulary of
 reasons, never attacker-controlled text, so a malicious listing cannot talk back through the error message.
@@ -60,6 +60,8 @@ each defense level. No network, no API keys.
 | + Detectors | 17 | 1 | **2** | 6 / 6 | 0 | $48.00 |
 | + Judge (full Tollgate) | 17 | 3 | **0** | 6 / 6 | 0 | $0.00 |
 
+![Red-team tab: charts of attacks that got through and dollars lost at each defense level, above the scenario table](docs/img/dashboard-redteam.png)
+
 "Stopped" means denied outright or held for a human; a held order costs nothing unless the owner
 approves it. The attacks are: hidden HTML comments, Unicode tag characters, zero-width obfuscation, fake
 "SYSTEM: pre-approved" reviews, a phishing renewal from "PayPaI" support, a "C0ntoso" look-alike merchant,
@@ -75,10 +77,6 @@ caught is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 > quotes and mandate limits cap the damage (`test_unrecognised_injection_is_still_bounded`).
 
 ## Quickstart (about 60 seconds, no keys)
-
-**No install:** [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/utlityapps/tollgate) starts the dashboard for you (port 8000 opens in your browser). In the Codespace terminal run `tollgate demo --url http://127.0.0.1:8000` and watch the rows appear.
-
-**Or locally:**
 
 ```bash
 git clone https://github.com/utlityapps/tollgate.git
@@ -98,9 +96,11 @@ tollgate serve                                # terminal 1: dashboard on http://
 tollgate demo --url http://127.0.0.1:8000     # terminal 2: the agent's purchases appear as rows
 ```
 
-The dashboard (AG Grid) fills in the admin token for you while the server is still using the public demo
-token. Click a row to see the findings, the judge's verdict and the timeline. Held orders have Approve /
-Deny buttons. `make help` lists shortcuts.
+The dashboard (AG Grid and AG Charts) fills in the admin token for you while the server is still using the
+public demo token. Click a row to see the findings, the judge's verdict and the timeline. Held orders have
+Approve / Deny buttons, and a captured payment has a two-tap Refund button. The Red team tab scores every
+attack on first open and charts how many got through, and how many dollars were lost, as each defense is
+added. `make help` lists shortcuts.
 
 Run the demo with a real Claude agent that shops through Tollgate (needs `ANTHROPIC_API_KEY`):
 
@@ -166,9 +166,9 @@ Before exposing Tollgate beyond localhost, set `TOLLGATE_SIGNING_KEY`, `TOLLGATE
 
 Agent token (`Authorization: Bearer ...`): `GET /api/products?q=`, `POST /api/quotes`, `POST /api/purchases`,
 `GET /api/purchases/{id}`. Admin token: mandates (`POST/GET /api/mandates`, `POST /api/mandates/{id}/revoke`),
-decisions (`GET /api/decisions`, `POST /api/decisions/{id}/approve|deny`), `GET /api/stats`,
-`POST /api/redteam/run`. The two tokens are separate; the agent token cannot read decisions or approve
-anything. Request bodies reject unknown fields, so a `price` or `payee` field is a 422, not ignored.
+decisions (`GET /api/decisions`, `POST /api/decisions/{id}/approve|deny|refund`), `GET /api/stats`,
+`POST /api/redteam/run`. The two tokens are separate; the agent token cannot read decisions, approve or
+refund anything. Request bodies reject unknown fields, so a `price` or `payee` field is a 422, not ignored.
 
 ```bash
 curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin" \
@@ -185,7 +185,7 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 | Part | Evidence |
 |---|---|
 | Quotes, policy, detectors, judge, engine, API, MCP, CLI, dashboard script | 260+ offline tests; they also pass on Python 3.11 and 3.13 |
-| PayPal Orders v2 client (create, get, capture, retries, idempotency, 401 refresh, webhook verification) | Contract tests against a mocked HTTP transport |
+| PayPal Orders v2 client (create, get, capture, refund, retries, idempotency, 401 refresh, webhook verification) | Contract tests against a mocked HTTP transport |
 | Order tampering between approval and capture | Tested with the mock backend's `tamper_amount` hook |
 | Live PayPal sandbox | **Run `tollgate smoke` with your own sandbox keys.** The author's build environment cannot reach PayPal, so this path is covered by mocks, not by a recorded live run in the test suite |
 | Claude judge and Claude demo agent | Tested with fake clients; a real-model run needs your `ANTHROPIC_API_KEY` |
@@ -206,16 +206,16 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 src/tollgate/
   quotes.py       signed, single-use quotes        policy.py     mandate checks
   detectors.py    deterministic text and order checks   judge.py  rule-based + optional Claude judge
-  engine.py       decision flow, human review, capture, webhooks
+  engine.py       decision flow, human review, capture, refunds, webhooks
   paypal.py       PayPal Orders v2 client + MockPayPal    store.py  SQLite
   api.py          FastAPI app and agent/admin auth    views.py  what the agent may see
   mcp_server.py   MCP tools          gateway.py   local and HTTP gateways
   redteam.py      26-scenario scorecard              agent_demo.py  scripted and Claude-driven demo
-  static/         AG Grid dashboard (AG Grid Community is vendored, MIT)
+  static/         dashboard (AG Grid + AG Charts Community, vendored, MIT)
 tests/            260+ tests          docs/   threat model and dashboard screenshots
 ```
 
 ## License
 
-[MIT](LICENSE). AG Grid Community, vendored under `src/tollgate/static/vendor/ag-grid/`, is also MIT
-(its license text is in that folder).
+[MIT](LICENSE). AG Grid Community 32.3.9 and AG Charts Community 14.3.0, vendored under
+`src/tollgate/static/vendor/`, are also MIT (each folder has its license text).

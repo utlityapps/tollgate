@@ -12,6 +12,8 @@
     decisions: [],
     selectedId: null,
     tab: "decisions",
+    redteamRan: false,
+    redteamRunning: false,
   };
   let decisionsApi = null;
   let mandatesApi = null;
@@ -185,6 +187,41 @@
     await refresh();
   }
 
+  async function refund(decision) {
+    try {
+      await api(`/api/decisions/${encodeURIComponent(decision.id)}/refund`, {
+        method: "POST",
+        body: { reviewer: "dashboard", note: "refunded in dashboard" },
+      });
+      banner("");
+    } catch (error) {
+      banner(`Could not refund: ${error.message}`);
+    }
+    await refresh();
+  }
+
+  // A refund moves money back, so the first tap arms the button and the second tap sends it.
+  function refundButton(decision) {
+    const label = "Refund this payment";
+    const button = el("button", { class: "danger", text: label });
+    let timer = null;
+    button.addEventListener("click", () => {
+      if (timer === null) {
+        button.textContent = `Tap again to refund ${fmtMoney(decision.total, decision.currency)}`;
+        timer = setTimeout(() => {
+          timer = null;
+          button.textContent = label;
+        }, 4000);
+        return;
+      }
+      clearTimeout(timer);
+      timer = null;
+      button.disabled = true;
+      refund(decision);
+    });
+    return button;
+  }
+
   function renderDetail(d) {
     const box = $("#detail");
     box.replaceChildren();
@@ -204,7 +241,9 @@
       d.paypal_order_id ? el("dt", { text: "Order" }) : null,
       d.paypal_order_id ? el("dd", {}, el("code", { text: d.paypal_order_id })) : null,
       d.capture_id ? el("dt", { text: "Capture" }) : null,
-      d.capture_id ? el("dd", {}, el("code", { text: d.capture_id })) : null));
+      d.capture_id ? el("dd", {}, el("code", { text: d.capture_id })) : null,
+      d.refund_id ? el("dt", { text: "Refund" }) : null,
+      d.refund_id ? el("dd", {}, el("code", { text: d.refund_id })) : null));
 
     box.append(el("h4", { text: "Findings" }), findingsList(d.findings || []));
     box.append(el("h4", { text: "Timeline" }),
@@ -223,6 +262,7 @@
         buttons.append(el("button", { text: "Simulate buyer approval (mock)", onclick: () => simulateBuyer(d) }));
       }
     }
+    if (d.status === "captured") buttons.append(refundButton(d));
     if (buttons.childNodes.length) box.append(buttons);
   }
 
@@ -298,6 +338,125 @@
     return p.value ? chip(p.value, String(p.value).toLowerCase()) : null;
   }
 
+  // ---- charts ------------------------------------------------------------------------
+  // AG Charts Community (vendored, MIT). It draws on a canvas, so no text here is ever parsed as HTML.
+  const INK = "#18202a";
+  const MUTED = "#5a6572";
+  const HAIRLINE = "#dde2e8";
+  const CRITICAL = "#d03b3b"; // status colour: the series means "a bad outcome"
+  const SERIES_1 = "#2a78d6"; // categorical slot 1: one nominal series gets one colour
+  const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const LEVEL_SHORT = { baseline: "None", limits: "Limits", detectors: "Detectors", full: "Full" };
+  const charts = new Map(); // container id -> { chart, key }
+
+  const chartsReady = () => typeof agCharts !== "undefined" && !!agCharts.AgCharts;
+
+  function chartFrame(title, subtitle) {
+    return {
+      background: { visible: false },
+      padding: { top: 6, right: 14, bottom: 6, left: 4 },
+      title: { text: title, textAlign: "left", color: INK, fontFamily: FONT, fontSize: 14, fontWeight: "bold" },
+      subtitle: { text: subtitle, textAlign: "left", color: MUTED, fontFamily: FONT, fontSize: 12 },
+      legend: { enabled: false }, // one series: the title already says what it is
+    };
+  }
+
+  const categoryAxis = (position) => ({
+    type: "category", position, paddingInner: 0.15, paddingOuter: 0.1, // bars have a fixed width, so the band is free for the label
+    line: { enabled: true, strokeWidth: 1, stroke: "#c3cad3" },
+    tick: { enabled: false },
+    // Never wrap; a label too wide for a phone shrinks towards 9px, then is truncated, never clipped.
+    label: { color: MUTED, fontFamily: FONT, fontSize: 12, wrapping: "never", truncate: true, minimumFontSize: 9 },
+  });
+
+  // Every column is labelled with its value, so the value axis (and its grid) would only repeat it.
+  const valueAxis = (position, max) => ({
+    type: "number", position, min: 0, ...(max ? { max } : {}),
+    line: { enabled: false },
+    tick: { enabled: false },
+    gridLine: { enabled: false },
+    label: { enabled: false },
+  });
+
+  const barSeries = (extra) => ({
+    type: "bar", strokeWidth: 0, cornerRadius: 4,
+    label: { enabled: true, placement: "outside-end", color: INK, fontFamily: FONT, fontSize: 12, fontWeight: "bold" },
+    ...extra,
+  });
+
+  function drawChart(id, options, summary) {
+    if (!chartsReady()) return;
+    const node = $(`#${id}`);
+    const key = JSON.stringify(options.data);
+    const known = charts.get(id);
+    if (known && known.key === key) return; // nothing changed, so do not restart the animation
+    node.setAttribute("aria-label", summary);
+    if (known) {
+      known.chart.update({ ...options, container: node });
+      known.key = key;
+    } else {
+      node.replaceChildren();
+      charts.set(id, { chart: agCharts.AgCharts.create({ ...options, container: node }), key });
+    }
+  }
+
+  function emptyChart(id, message) {
+    const known = charts.get(id);
+    if (known) {
+      known.chart.destroy();
+      charts.delete(id);
+    }
+    $(`#${id}`).replaceChildren(el("p", { class: "placeholder", text: message }));
+  }
+
+  function renderRedteamCharts(sc) {
+    const attacks = sc.baseline.succeeded;
+    const rows = [{ id: "baseline", succeeded: attacks, lost: Number(sc.baseline.usd_lost) }]
+      .concat(sc.levels.map((l) => ({ id: l.id, succeeded: l.attacks.succeeded, lost: Number(l.usd_lost) })))
+      .map((r) => ({ ...r, level: LEVEL_SHORT[r.id] || r.id }));
+    drawChart("rtChartSucceeded", {
+      ...chartFrame("Attacks that got through", `Out of ${attacks} attacks`),
+      data: rows,
+      series: [barSeries({
+        xKey: "level", yKey: "succeeded", xName: "Defense level", yName: "Attacks that got through",
+        fill: CRITICAL, width: 24, label: { ...barSeries({}).label, formatter: ({ value }) => String(value) },
+      })],
+      axes: { x: categoryAxis("bottom"), y: valueAxis("left", attacks + Math.ceil(attacks / 5)) },
+    }, `Attacks that got through, out of ${attacks}: ${rows.map((r) => `${r.level} ${r.succeeded}`).join(", ")}.`);
+    drawChart("rtChartLost", {
+      ...chartFrame("Money lost", "Spent on attacker-chosen goods"),
+      data: rows,
+      series: [barSeries({
+        xKey: "level", yKey: "lost", xName: "Defense level", yName: "Money lost (USD)",
+        fill: CRITICAL, width: 24, label: { ...barSeries({}).label, formatter: ({ value }) => fmtMoney(value) },
+      })],
+      axes: { x: categoryAxis("bottom"), y: valueAxis("left") },
+    }, `Money lost: ${rows.map((r) => `${r.level} ${fmtMoney(r.lost)}`).join(", ")}.`);
+  }
+
+  // Which finding codes flagged how many requests. Codes come from a fixed vocabulary, never from listing text.
+  // A ranked list, not a canvas: the longest codes wrap instead of being clipped, and it reads fine on a phone.
+  function renderFired(decisions) {
+    const counts = new Map();
+    for (const d of decisions) {
+      for (const code of new Set((d.findings || []).map((f) => f.code))) counts.set(code, (counts.get(code) || 0) + 1);
+    }
+    const data = [...counts].map(([code, requests]) => ({ code, requests }))
+      .sort((a, b) => b.requests - a.requests || a.code.localeCompare(b.code)).slice(0, 8);
+    const list = $("#firedList");
+    list.replaceChildren();
+    if (!data.length) {
+      list.append(el("li", { class: "empty muted", text: "No findings yet. Every flagged request will show up here." }));
+      return;
+    }
+    for (const row of data) {
+      const pct = Math.max(3, Math.round((row.requests / data[0].requests) * 100));
+      list.append(el("li", {},
+        el("code", { text: row.code }),
+        el("span", { class: "track" }, el("span", { class: "fill", style: `width:${pct}%` }), el("b", { text: String(row.requests) }))));
+    }
+  }
+
   function createRedteamGrid() {
     redteamApi = agGrid.createGrid($("#redteamGrid"), {
       columnDefs: [
@@ -338,6 +497,8 @@
   }
 
   async function runRedteam() {
+    if (state.redteamRunning) return;
+    state.redteamRunning = true;
     const button = $("#runRedteam");
     button.disabled = true;
     $("#rtHeadline").textContent = "Running...";
@@ -345,12 +506,15 @@
       const sc = await api("/api/redteam/run", { method: "POST" });
       $("#rtHeadline").textContent = sc.headline + (sc.passed ? "" : " (some scenarios missed expectations)");
       renderLevels(sc);
+      renderRedteamCharts(sc);
       redteamApi.setGridOption("rowData", sc.scenarios);
+      state.redteamRan = true;
       banner("");
     } catch (error) {
       $("#rtHeadline").textContent = "";
       banner(`Red team failed: ${error.message}`);
     } finally {
+      state.redteamRunning = false;
       button.disabled = false;
     }
   }
@@ -370,6 +534,7 @@
       const [rows, stats] = await Promise.all([api("/api/decisions?limit=300"), api("/api/stats")]);
       state.decisions = rows;
       decisionsApi.setGridOption("rowData", rows);
+      renderFired(rows);
       renderKpis(stats);
       const selected = rows.find((r) => r.id === state.selectedId);
       if (selected) renderDetail(selected);
@@ -384,6 +549,7 @@
     for (const tab of document.querySelectorAll(".tab")) tab.classList.toggle("active", tab.dataset.tab === name);
     for (const id of ["decisions", "mandates", "redteam"]) $(`#tab-${id}`).hidden = id !== name;
     if (name === "mandates") loadMandates();
+    if (name === "redteam" && !state.redteamRan && state.token) runRedteam();
   }
 
   async function start() {
@@ -393,6 +559,9 @@
     applyColumnLayout();
     narrow.addEventListener("change", applyColumnLayout);
     renderDetail(null);
+    emptyChart("rtChartSucceeded", "The chart appears when the red team has run.");
+    emptyChart("rtChartLost", "The chart appears when the red team has run.");
+    renderFired([]);
     for (const tab of document.querySelectorAll(".tab")) tab.addEventListener("click", () => switchTab(tab.dataset.tab));
     $("#mandateForm").addEventListener("submit", submitMandate);
     $("#runRedteam").addEventListener("click", runRedteam);
