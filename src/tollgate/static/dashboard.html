@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tollgate: checkout firewall for AI shopping agents</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2310243e'/%3E%3Crect x='6' y='8' width='4' height='16' rx='1' fill='%23ffd98a'/%3E%3Crect x='6' y='14' width='20' height='4' rx='2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/vendor/ag-grid/ag-grid.css">
+  <link rel="stylesheet" href="/static/vendor/ag-grid/ag-theme-quartz.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header>
+    <div class="brand">Tollgate <small>checkout firewall for AI shopping agents</small></div>
+    <div id="pills" class="pills"></div>
+    <form id="login" class="login" autocomplete="off">
+      <input id="token" type="password" placeholder="Admin token" aria-label="Admin token">
+      <button type="submit">Connect</button>
+    </form>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main>
+    <section class="kpis" aria-label="Summary">
+      <div class="kpi ok"><span id="kpiApproved">$0.00</span><label>Approved spend</label></div>
+      <div class="kpi bad"><span id="kpiBlocked">$0.00</span><label>Blocked by Tollgate</label></div>
+      <div class="kpi warn"><span id="kpiHeld">$0.00</span><label id="kpiHeldLabel">Waiting for a human</label></div>
+      <div class="kpi"><span id="kpiCount">0</span><label>Purchase requests</label></div>
+    </section>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="decisions" role="tab">Decisions</button>
+      <button class="tab" data-tab="mandates" role="tab">Mandates</button>
+      <button class="tab" data-tab="redteam" role="tab">Red team</button>
+    </nav>
+
+    <section id="tab-decisions" class="panel">
+      <div id="decisionsGrid" class="ag-theme-quartz grid"></div>
+      <aside id="detail" class="detail" aria-live="polite"></aside>
+    </section>
+
+    <section id="tab-mandates" class="panel stack" hidden>
+      <form id="mandateForm" class="card form">
+        <h2>New mandate</h2>
+        <p class="muted">What the owner signs off on before an agent may spend anything.</p>
+        <label>Owner <input name="owner" value="Aanu" required maxlength="120"></label>
+        <label class="wide">Task <input name="task" value="Buy a USB-C cable for my laptop and basic office supplies" required minlength="3" maxlength="500"></label>
+        <label>Per-order limit (USD) <input name="per_order_limit" value="60" inputmode="decimal" required></label>
+        <label>Daily limit (USD) <input name="daily_limit" value="150" inputmode="decimal" required></label>
+        <label>Auto-approve below (USD) <input name="auto_approve_below" value="25" inputmode="decimal" required></label>
+        <label>Max items per order <input name="max_items_per_order" value="5" inputmode="numeric" required></label>
+        <label class="wide">Allowed categories (comma separated) <input name="allowed_categories" value="electronics, office-supplies, home-office" required></label>
+        <label class="wide">Allowed merchant IDs (comma separated, * for any) <input name="allowed_merchants" value="m_contoso, m_northwind" required></label>
+        <label>Valid for (hours) <input name="ttl_hours" value="24" inputmode="numeric" required></label>
+        <div class="actions"><button type="submit" class="primary">Create mandate</button><span id="mandateMsg" class="muted"></span></div>
+      </form>
+      <div id="mandatesGrid" class="ag-theme-quartz grid short"></div>
+    </section>
+
+    <section id="tab-redteam" class="panel stack" hidden>
+      <div class="card">
+        <h2>Red-team scorecard</h2>
+        <p class="muted">Replays every attack against throwaway engines at three defense levels. No network, no API keys, nothing touches your real data.</p>
+        <div class="actions"><button id="runRedteam" class="primary">Run red team</button><span id="rtHeadline" class="headline"></span></div>
+        <table id="rtLevels" class="levels"></table>
+      </div>
+      <div id="redteamGrid" class="ag-theme-quartz grid tall"></div>
+    </section>
+  </main>
+
+  <footer>Sandbox only. Listing text is shown as plain text and is never executed or rendered as HTML.</footer>
+
+  <script src="/static/vendor/ag-grid/ag-grid-community.min.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
