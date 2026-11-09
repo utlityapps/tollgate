@@ -23,18 +23,18 @@ immune. It makes sure that **what the model says is not what decides the payment
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["AI shopping agent"] -->|"MCP tools or REST"| G["Tollgate gateway"]
-    G --> Q["1. Signed single-use quotes"]
-    Q --> M["2. Mandate policy"]
-    M --> D["3. Deterministic detectors"]
-    D --> J["4. Judge: rules plus optional Claude"]
+    G --> Q["1. Signed single-use quotes<br/>price, merchant and mandate pinned"]
+    Q --> M["2. Mandate policy<br/>limits, categories, merchants"]
+    M --> D["3. Deterministic detectors<br/>hidden text, injections, look-alikes"]
+    D --> J["4. Judge: rules plus optional Claude<br/>can only make a decision stricter"]
     J -->|APPROVE| P["PayPal order created"]
     J -->|ESCALATE| H["5. Human review in the dashboard"]
     J -->|DENY| X["Blocked and logged"]
     H -->|approved| P
     P --> B["Buyer approves inside PayPal"]
-    B --> C["Re-verify order, then capture"]
+    B --> C["Re-verify the order, then capture"]
 ```
 
 | Layer | What it does | Who can overrule it |
@@ -75,6 +75,10 @@ caught is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 > quotes and mandate limits cap the damage (`test_unrecognised_injection_is_still_bounded`).
 
 ## Quickstart (about 60 seconds, no keys)
+
+**No install:** [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/utlityapps/tollgate) starts the dashboard for you (port 8000 opens in your browser). In the Codespace terminal run `tollgate demo --url http://127.0.0.1:8000` and watch the rows appear.
+
+**Or locally:**
 
 ```bash
 git clone https://github.com/utlityapps/tollgate.git
