@@ -27,3 +27,41 @@ jobs:
         run: pytest -q
       - name: Red-team scorecard must stay at 20 of 20
         run: tollgate redteam
+
+  docker:
+    # Builds the image that the README and render.yaml point at, starts it, and runs the
+    # scripted demo against the running container (mock payments, no secrets).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Build the image
+        run: docker build -t tollgate .
+      - name: Start the container and wait for it to be healthy
+        run: |
+          docker run -d --name tollgate -p 8000:8000 tollgate
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs tollgate
+          exit 1
+      - name: Dashboard and vendored libraries are served
+        run: |
+          curl -fsS -o /tmp/index.html http://127.0.0.1:8000/
+          grep -q "Tollgate" /tmp/index.html
+          curl -fsS -o /dev/null http://127.0.0.1:8000/static/vendor/ag-grid/ag-grid-community.min.js
+          curl -fsS -o /dev/null http://127.0.0.1:8000/static/vendor/ag-charts/ag-charts-community.min.js
+      - name: Scripted demo runs against the container
+        run: |
+          pip install .
+          tollgate demo --url http://127.0.0.1:8000 --auto --no-color
+      - name: Container logs
+        if: always()
+        run: docker logs tollgate
