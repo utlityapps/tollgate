@@ -198,7 +198,7 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 | PayPal Orders v2 client (create, get, capture, refund, retries, idempotency, 401 refresh, webhook verification) | Contract tests against a mocked HTTP transport |
 | Order tampering between approval and capture | Tested with the mock backend's `tamper_amount` hook |
 | Docker image (the one `render.yaml` deploys) | Built in CI on every push; the container serves the dashboard and the scripted demo runs against it |
-| Live PayPal sandbox | **Run `tollgate smoke` with your own sandbox keys.** The author's build environment cannot reach PayPal, so this path is covered by mocks, not by a recorded live run in the test suite |
+| Live PayPal sandbox | Run by hand with `tollgate smoke` on 2026-11-09: a real $1.00 sandbox order was created, approved by a sandbox buyer inside PayPal, and captured (`COMPLETED`). CI cannot reach PayPal, so the test suite covers this path with mocks; run `tollgate smoke` with your own sandbox keys to repeat it |
 | Claude judge and Claude demo agent | Tested with fake clients; a real-model run needs your `ANTHROPIC_API_KEY` |
 
 ## Limitations
