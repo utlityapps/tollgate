@@ -159,7 +159,13 @@ def parse_verdict(text: str, source: str = "llm") -> JudgeVerdict:
 
 
 class LLMJudge:
-    """Asks a Claude model whether the purchase fits the task. Sees no listing text."""
+    """Asks a Claude model whether the purchase fits the task.
+
+    It sees the owner's task, the agent's justification and each item's name, category, quantity and
+    price, plus the merchant name (names capped at 80 characters). It never sees descriptions or reviews.
+    Names are still listing text, so a reply that is not the expected JSON raises JudgeError and the
+    order escalates to a human.
+    """
 
     source = "llm"
 
@@ -217,9 +223,9 @@ class LLMJudge:
 class JudgeChain:
     """Always runs the heuristic judge and adds the LLM when configured.
 
-    Either one flagging the purchase is enough. If the LLM is down we keep the heuristic
-    verdict, so an outage can only make Tollgate less clever, never more permissive than
-    its deterministic rules.
+    Either one flagging the purchase is enough. If the LLM is configured but fails (timeout,
+    outage, unreadable reply), the error is raised so the engine records JUDGE_ERROR and a
+    human reviews the order: a model error escalates, it never approves.
     """
 
     def __init__(self, heuristic: Judge, llm: Judge | None = None) -> None:
@@ -234,16 +240,7 @@ class JudgeChain:
         base = self._heuristic.review(inp)
         if self._llm is None:
             return base
-        try:
-            llm = self._llm.review(inp)
-        except JudgeError:
-            return JudgeVerdict(
-                base.suspicious,
-                base.confidence,
-                base.summary,
-                base.flags,
-                "heuristic (llm unavailable)",
-            )
+        llm = self._llm.review(inp)  # a JudgeError propagates: the engine escalates to a human
         suspicious = base.suspicious or llm.suspicious
         summary = llm.summary if llm.suspicious else (base.summary if base.suspicious else llm.summary)
         return JudgeVerdict(

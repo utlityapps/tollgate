@@ -129,4 +129,6 @@ class Decision(BaseModel):
     capture_id: str | None = None
     refund_id: str | None = None
     approve_url: str | None = None
+    # When the order first counted against the daily limit (the PayPal order was created).
+    counted_at: datetime | None = None
     events: list[dict[str, str]] = Field(default_factory=list)

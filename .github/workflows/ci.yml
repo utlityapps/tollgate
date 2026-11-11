@@ -42,7 +42,8 @@ jobs:
         run: docker build -t tollgate .
       - name: Start the container and wait for it to be healthy
         run: |
-          docker run -d --name tollgate -p 8000:8000 tollgate
+          # The scripted demo uses the public demo tokens, so opt in explicitly for this throwaway run.
+          docker run -d --name tollgate -p 8000:8000 -e TOLLGATE_ALLOW_DEMO_SECRETS=1 tollgate
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/api/health; then
               echo
@@ -52,6 +53,12 @@ jobs:
           done
           docker logs tollgate
           exit 1
+      - name: Without real secrets the container refuses to start
+        run: |
+          set +e
+          docker run --rm tollgate
+          code=$?
+          test "$code" -eq 2
       - name: Dashboard and vendored libraries are served
         run: |
           curl -fsS -o /tmp/index.html http://127.0.0.1:8000/

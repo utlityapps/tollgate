@@ -37,7 +37,8 @@ from .paypal import MockPayPal, PayPalClient, PayPalError, PayPalOrder, Payments
 from .store import Store
 
 CATALOG_CURRENCY = "USD"
-COUNTED = ("order_created", "captured")  # statuses that count as spend
+# Statuses that count as spend: every state in which money can still move or has moved.
+COUNTED = ("order_created", "capture_failed", "captured")
 VELOCITY_STATUSES = COUNTED + ("pending_review",)
 DENY_RISK = 0.80
 ESCALATE_RISK = 0.35
@@ -106,8 +107,12 @@ def _reasons(findings: Sequence[Finding]) -> list[str]:
     return out[:8]
 
 
-def _order_problem(decision: Decision, order: PayPalOrder) -> str | None:
+def _order_problem(decision: Decision, order: PayPalOrder, merchant_id: str = "") -> str | None:
     """Compare what PayPal holds with what Tollgate approved."""
+    if order.unit_count != 1:
+        return f"PayPal order has {order.unit_count} purchase units; Tollgate approved one"
+    if merchant_id and order.payee_merchant_id and order.payee_merchant_id != merchant_id:
+        return "PayPal order pays a different merchant account than this shop"
     if order.custom_id != decision.id:
         return "PayPal order belongs to a different Tollgate decision"
     if order.currency != decision.currency:
@@ -319,6 +324,19 @@ class Engine:
                 reject("QUOTE_UNKNOWN_PRODUCT", "A quote refers to an unknown product or merchant")
                 continue
             try:
+                consistent = (
+                    merchant.id == product.merchant_id
+                    and Decimal(str(payload["px"])) == product.price
+                    and str(payload["cur"]) == CATALOG_CURRENCY
+                    and 1 <= int(payload["qty"]) <= 50
+                    and 0 < float(payload["exp"]) - float(payload["iat"]) <= self.s.quote_ttl_seconds
+                )
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                consistent = False
+            if not consistent:
+                reject("QUOTE_INVALID", "A quote does not match the catalog")
+                continue
+            try:
                 items.append(
                     LineItem(
                         product_id=product.id,
@@ -345,6 +363,7 @@ class Engine:
             key = f"item.{item.product_id}"
             listing[f"{key}.name"] = item.name
             listing[f"{key}.category"] = item.category
+            listing[f"{key}.merchant"] = item.merchant_name  # merchant names are listing text too
             product = catalog.get(item.product_id)
             if product is not None:
                 listing[f"{key}.description"] = product.description
@@ -489,7 +508,7 @@ class Engine:
                 return_url=f"{base}/paypal/return",
                 cancel_url=f"{base}/paypal/cancel",
             )
-            problem = _order_problem(d, order)
+            problem = _order_problem(d, order, self.s.paypal_merchant_id)
         except PayPalError as exc:
             self._payment_error(d, f"PayPal order could not be created: {exc}")
             return
@@ -499,6 +518,7 @@ class Engine:
         d.paypal_order_id = order.id
         d.approve_url = order.approve_url
         d.status = "order_created"
+        d.counted_at = self.now()
         self._event(d, "order_created", f"{self.payments.name} order {order.id}")
 
     def _payment_error(self, d: Decision, detail: str) -> None:
@@ -526,9 +546,13 @@ class Engine:
                 order = self.payments.get_order(d.paypal_order_id)
             except PayPalError as exc:
                 raise EngineError(f"PayPal lookup failed: {exc}") from exc
-            problem = _order_problem(d, order)
+            problem = _order_problem(d, order, self.s.paypal_merchant_id)
             if problem:
                 return self._block_capture(d, problem)
+            if order.status != "COMPLETED":
+                mandate = self.store.get_mandate(d.mandate_id)
+                if mandate is None or not mandate.active or self.now() >= mandate.expires_at:
+                    return self._block_capture(d, "The mandate was revoked or expired before capture")
             if order.status == "COMPLETED":
                 return self._mark_captured(d, order)
             if order.status != "APPROVED":
@@ -540,9 +564,8 @@ class Engine:
                 self._event(d, "capture_failed", str(exc))
                 self.store.save_decision(d)
                 return d
-            if done.status != "COMPLETED" or (
-                done.capture_amount is not None and done.capture_amount != d.total
-            ):
+            captured = done.captured_total if done.captured_total is not None else done.capture_amount
+            if done.status != "COMPLETED" or (captured is not None and captured != d.total):
                 return self._block_capture(d, "PayPal captured something other than what was approved")
             return self._mark_captured(d, done)
 
@@ -644,11 +667,13 @@ class Engine:
                     return {"handled": False, "reason": str(exc)}
             elif kind in ("PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED"):
                 decision = self.get_decision(decision.id)
-                new_status = {
-                    "PAYMENT.CAPTURE.DENIED": "capture_failed",
-                    "PAYMENT.CAPTURE.REFUNDED": "refunded",
-                    "PAYMENT.CAPTURE.REVERSED": "reversed",
+                new_status, allowed_from = {
+                    "PAYMENT.CAPTURE.DENIED": ("capture_failed", ("order_created",)),
+                    "PAYMENT.CAPTURE.REFUNDED": ("refunded", ("captured",)),
+                    "PAYMENT.CAPTURE.REVERSED": ("reversed", ("captured",)),
                 }[kind]
+                if decision.status not in allowed_from + (new_status,):
+                    return {"handled": False, "reason": f"{kind} does not apply to a '{decision.status}' order"}
                 if decision.status != new_status:  # our own refund already set it: don't log it twice
                     decision.status = new_status
                     self._event(decision, kind.lower().replace(".", "_"), "reported by PayPal webhook")

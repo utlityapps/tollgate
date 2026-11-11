@@ -76,6 +76,9 @@ def _simple_page(title: str, body: str, status: int = 200) -> HTMLResponse:
     return HTMLResponse(page, status_code=status, headers={"Content-Security-Policy": PAGE_CSP})
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
     engine = engine or build_engine(settings or Settings.from_env())
     cfg = engine.s
@@ -126,14 +129,19 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         response.headers.setdefault("X-Frame-Options", "DENY")
         if request.url.path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store")
+        if request.url.path.startswith("/static/"):
+            # The dashboard files are reachable here too, so they get the same strict policy.
+            response.headers.setdefault("Content-Security-Policy", DASHBOARD_CSP)
         return response
 
     # --- public ----------------------------------------------------------------------
     @app.get("/api/health")
-    def health() -> dict[str, Any]:
+    def health(request: Request) -> dict[str, Any]:
         info: dict[str, Any] = {"ok": True, "version": __version__, **engine.describe()}
-        if cfg.admin_token == DEMO_ADMIN_TOKEN:
-            info["admin_token_hint"] = DEMO_ADMIN_TOKEN  # only ever the public demo value
+        client = request.client.host if request.client else ""
+        if cfg.admin_token == DEMO_ADMIN_TOKEN and client in LOOPBACK_HOSTS:
+            # Only the public demo value, and only to a browser on this machine.
+            info["admin_token_hint"] = DEMO_ADMIN_TOKEN
         return info
 
     @app.get("/", include_in_schema=False)

@@ -21,9 +21,20 @@ def _serve(args: argparse.Namespace) -> int:
 
     settings = Settings.from_env()
     if settings.using_demo_secrets and args.host not in ("127.0.0.1", "localhost", "::1"):
+        if os.environ.get("TOLLGATE_ALLOW_DEMO_SECRETS") != "1":
+            print(
+                "Refusing to listen on a public address with the public DEMO secrets: anyone who\n"
+                "can reach this server could act as the owner. Set real secrets, for example:\n\n"
+                "  echo \"TOLLGATE_SIGNING_KEY=$(openssl rand -hex 32)\" >> .env\n"
+                "  echo \"TOLLGATE_ADMIN_TOKEN=$(openssl rand -hex 24)\" >> .env\n"
+                "  echo \"TOLLGATE_AGENT_TOKEN=$(openssl rand -hex 24)\" >> .env\n\n"
+                "or use --host 127.0.0.1. For a throwaway local demo only, set "
+                "TOLLGATE_ALLOW_DEMO_SECRETS=1.",
+                file=sys.stderr,
+            )
+            return 2
         print(
-            "WARNING: binding to a public address with DEMO secrets. Set TOLLGATE_SIGNING_KEY, "
-            "TOLLGATE_ADMIN_TOKEN and TOLLGATE_AGENT_TOKEN first.",
+            "WARNING: listening on a public address with DEMO secrets (TOLLGATE_ALLOW_DEMO_SECRETS=1).",
             file=sys.stderr,
         )
     mode = "PayPal sandbox" if settings.paypal_configured else "mock payments (no PayPal keys set)"

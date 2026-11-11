@@ -106,15 +106,19 @@ These are real, and the tests document the first two on purpose.
    heuristic judge always runs, either one flagging is enough, and the rules own DENY.
 3. **A human can still say yes.** The owner sees the findings before approving a held order, but Tollgate cannot
    stop an owner from approving something bad.
-4. **Stolen or default secrets.** With the built-in demo tokens, anyone who can reach the server is the owner.
-   The CLI and the dashboard warn about this; set real secrets before exposing the service.
+4. **Stolen secrets.** Whoever holds the admin token is the owner. `tollgate serve` refuses to listen beyond
+   localhost with the built-in demo secrets, and a quote must also match the catalog, so a leaked signing key
+   cannot change a price or a merchant.
 5. **A verified merchant can still sell something you shouldn't buy** within your limits. Mandates bound the
    loss; they do not judge a merchant's honesty.
 6. **No rate limiting** on the quote and search endpoints; put Tollgate behind a gateway if it is public.
-7. **Storage** is SQLite with a process-wide lock: fine for a demo, not for scale.
+7. **Storage** is SQLite with a process-wide lock: fine for a demo, not for scale. Run a single process; with
+   several workers on one database file the daily-limit check is not atomic (audit finding A-08).
 8. **Live PayPal behaviour is unverified in the build environment.** The client is tested against a mocked
    transport; `tollgate smoke` runs the same calls against the real sandbox with your keys.
 9. **The catalog is a simulation.** The agent API is generic, but no real marketplace is connected.
+
+An independent fresh-context audit and its fixes are written up in [AUDIT.md](AUDIT.md).
 
 Not covered at all: buyer account takeover, chargebacks, partial refunds and fraud scoring, KYC, merchant onboarding, and live money.
 

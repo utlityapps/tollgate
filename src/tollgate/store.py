@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     status TEXT NOT NULL,
     total TEXT NOT NULL,
     paypal_order_id TEXT,
+    counted_at TEXT,
     data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_mandate ON decisions (mandate_id, created_at);
@@ -43,6 +44,9 @@ class Store:
         self._lock = threading.RLock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(decisions)")}
+            if "counted_at" not in columns:  # databases made before counted_at existed
+                self._conn.execute("ALTER TABLE decisions ADD COLUMN counted_at TEXT")
             self._conn.commit()
 
     # --- mandates -----------------------------------------------------------------
@@ -69,10 +73,11 @@ class Store:
     def save_decision(self, decision: Decision) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO decisions (id, mandate_id, created_at, outcome, status, total, paypal_order_id, data) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO decisions (id, mandate_id, created_at, outcome, status, total, paypal_order_id, "
+                "counted_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET outcome = excluded.outcome, status = excluded.status, "
-                "total = excluded.total, paypal_order_id = excluded.paypal_order_id, data = excluded.data",
+                "total = excluded.total, paypal_order_id = excluded.paypal_order_id, "
+                "counted_at = excluded.counted_at, data = excluded.data",
                 (
                     decision.id,
                     decision.mandate_id,
@@ -81,6 +86,7 @@ class Store:
                     decision.status,
                     str(decision.total),
                     decision.paypal_order_id,
+                    decision.counted_at.isoformat() if decision.counted_at else None,
                     decision.model_dump_json(),
                 ),
             )
@@ -106,10 +112,17 @@ class Store:
         return [Decision.model_validate_json(r["data"]) for r in rows]
 
     def spent_since(self, mandate_id: str, since: datetime, statuses: Sequence[str]) -> Decimal:
+        """Spend that counts against the daily limit.
+
+        The window is keyed on when an order started counting (its PayPal order was created),
+        not on when the agent asked, so an order a human approves hours later still counts for
+        a full 24 hours after it can move money.
+        """
         marks = ",".join("?" for _ in statuses)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT total FROM decisions WHERE mandate_id = ? AND created_at >= ? AND status IN ({marks})",
+                "SELECT total FROM decisions WHERE mandate_id = ? "
+                f"AND COALESCE(counted_at, created_at) >= ? AND status IN ({marks})",
                 (mandate_id, since.isoformat(), *statuses),
             ).fetchall()
         return sum((Decimal(r["total"]) for r in rows), Decimal("0.00"))

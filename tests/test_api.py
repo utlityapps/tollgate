@@ -94,10 +94,13 @@ def test_health_is_public_and_leaks_no_secrets(client: TestClient) -> None:
     assert "test-admin" not in json.dumps(body) and "test-signing-key" not in json.dumps(body)
 
 
-def test_health_shows_the_public_demo_token_only_when_it_is_the_demo_token() -> None:
+def test_health_shows_the_public_demo_token_only_to_this_machine() -> None:
+    # Audit A-01: the demo admin token is only hinted to a browser on the same machine.
     app = create_app(Settings(db_path=":memory:", signing_key="k", agent_token="a"))
-    body = TestClient(app).get("/api/health").json()
-    assert body["admin_token_hint"] == "demo-admin" and body["demo_secrets"] is True
+    local = TestClient(app, client=("127.0.0.1", 50000)).get("/api/health").json()
+    assert local["admin_token_hint"] == "demo-admin" and local["demo_secrets"] is True
+    remote = TestClient(app, client=("203.0.113.7", 50000)).get("/api/health").json()
+    assert "admin_token_hint" not in remote and remote["demo_secrets"] is True
 
 
 # --- a purchase over HTTP, end to end ---------------------------------------------------

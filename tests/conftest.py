@@ -47,7 +47,7 @@ class World:
         layers: Iterable[str] = ALL_LAYERS,
     ) -> None:
         self.clock = clock
-        self.payments: Any = payments or MockPayPal(settings.public_base_url)
+        self.payments: Any = payments or MockPayPal(settings.public_base_url, accept_test_webhooks=True)
         self.engine = Engine(
             settings,
             Store(":memory:"),

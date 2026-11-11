@@ -259,6 +259,7 @@ def test_serve_warns_before_exposing_demo_secrets(
 ) -> None:
     import uvicorn
 
+    clean_env.setenv("TOLLGATE_ALLOW_DEMO_SECRETS", "1")
     started: dict[str, Any] = {}
     clean_env.setattr(uvicorn, "run", lambda app, **kwargs: started.update(app=app, **kwargs))
     with pytest.raises(SystemExit) as stop:
@@ -267,6 +268,20 @@ def test_serve_warns_before_exposing_demo_secrets(
     assert stop.value.code == 0 and started["host"] == host and started["port"] == 8123
     assert ("DEMO secrets" in captured.err) is warned
     assert "mock payments" in captured.out and "heuristic judge" in captured.out
+
+
+def test_serve_refuses_a_public_address_with_demo_secrets(
+    clean_env: pytest.MonkeyPatch, capsys: Capture
+) -> None:
+    # Audit A-01/A-02: the public demo token and signing key must never face a network.
+    import uvicorn
+
+    started: dict[str, Any] = {}
+    clean_env.setattr(uvicorn, "run", lambda app, **kwargs: started.update(app=app, **kwargs))
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["serve", "--host", "0.0.0.0", "--port", "8123"])
+    assert stop.value.code == 2 and not started
+    assert "Refusing" in capsys.readouterr().err
 
 
 class FakePayPal:

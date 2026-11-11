@@ -25,6 +25,7 @@ class Settings:
     paypal_client_secret: str = ""
     paypal_base_url: str = f"https://{SANDBOX_HOST}"
     paypal_webhook_id: str = ""
+    paypal_merchant_id: str = ""
     public_base_url: str = "http://localhost:8000"
     anthropic_api_key: str = ""
     judge_model: str = "claude-haiku-5-5"
@@ -77,6 +78,7 @@ class Settings:
             paypal_client_secret=get("PAYPAL_CLIENT_SECRET"),
             paypal_base_url=base_url,
             paypal_webhook_id=get("PAYPAL_WEBHOOK_ID"),
+            paypal_merchant_id=get("PAYPAL_MERCHANT_ID"),
             public_base_url=public_url,
             anthropic_api_key=get("ANTHROPIC_API_KEY"),
             judge_model=get("TOLLGATE_JUDGE_MODEL", "claude-haiku-5-5"),

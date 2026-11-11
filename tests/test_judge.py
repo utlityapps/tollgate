@@ -218,11 +218,11 @@ def test_chain_prefers_the_alarming_summary() -> None:
     assert chain.review(review_input()).summary == "llm concern"
 
 
-def test_llm_outage_falls_back_to_the_heuristic_verdict() -> None:
+def test_llm_outage_is_raised_so_a_human_reviews() -> None:
+    # Audit B-02: a configured LLM that fails must not fall back to an approval.
     chain = JudgeChain(HeuristicJudge(), Fixed(JudgeError("down")))
-    off_task = chain.review(review_input("Ergonomic wireless mouse"))
-    assert off_task.suspicious and off_task.source == "heuristic (llm unavailable)"
-    assert not chain.review(review_input()).suspicious
+    with pytest.raises(JudgeError):
+        chain.review(review_input())
 
 
 def test_chain_names_and_builder() -> None:

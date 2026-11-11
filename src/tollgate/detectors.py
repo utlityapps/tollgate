@@ -23,6 +23,37 @@ _BIDI = {
     "‎", "‏", "‪", "‫", "‬", "‭", "‮",
     "⁦", "⁧", "⁨", "⁩",
 }  # fmt: skip
+# Default-ignorable characters that render as nothing (beyond the explicit list above).
+_IGNORABLE_EXTRA = {"\u034f", "\u180b", "\u180c", "\u180d", "\u180f"}
+# Blank "filler" letters that can stand in for a space: read them as a space.
+_BLANK_FILLERS = {"\u115f", "\u1160", "\u3164", "\uffa0"}
+
+
+def _is_ignorable(ch: str) -> bool:
+    cp = ord(ch)
+    return (
+        ch in _IGNORABLE_EXTRA
+        or unicodedata.category(ch) == "Cf"
+        or 0xFE00 <= cp <= 0xFE0F  # variation selectors
+        or 0xE0100 <= cp <= 0xE01EF  # variation selectors supplement
+    )
+
+
+# Cyrillic and Greek letters that look like Latin ones (a practical subset of UTS #39).
+_LATIN_LOOKALIKES = str.maketrans(
+    {
+        "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c",
+        "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j", "ӏ": "l", "ѕ": "s", "ԁ": "d", "ԛ": "q",
+        "ԝ": "w", "ɡ": "g", "ո": "n", "ս": "u",
+        "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C",
+        "Т": "T", "У": "Y", "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+        "α": "a", "ο": "o", "ρ": "p", "ν": "v", "ι": "i", "κ": "k", "τ": "t", "υ": "u", "χ": "x",
+        "ε": "e", "ω": "w", "η": "n",
+        "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N",
+        "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+    }
+)  # fmt: skip
+
 _HTML_COMMENT = re.compile(r"<!--(.*?)-->", re.DOTALL)
 _STYLE_ATTR = re.compile(r"style\s*=", re.IGNORECASE)
 _CSS_HIDE = re.compile(
@@ -61,6 +92,13 @@ def normalize(text: str | None) -> Normalized:
             continue
         if ch in _BIDI:
             bidi += 1
+            continue
+        if ch in _BLANK_FILLERS:
+            zero_width += 1
+            kept.append(" ")
+            continue
+        if _is_ignorable(ch):
+            zero_width += 1
             continue
         kept.append(ch)
     clean = unicodedata.normalize("NFKC", "".join(kept))
@@ -174,8 +212,8 @@ PATTERNS: list[Pattern] = [
     ),
     _p(
         "ROLE_SPOOF",
-        r"(?:^|\n)[ \t]*[\[<(]?[ \t]*(?:system|assistant|developer|admin(?:istrator)?|operator|root)"
-        r"[ \t]*[\]>)]?[ \t]*[:：>]",
+        r"(?:^|\n)[ \t]*+(?:[\[<(][ \t]*+)?(?:system|assistant|developer|admin(?:istrator)?|operator|root)"
+        r"[ \t]*+(?:[\]>)][ \t]*+)?[:：>]",
         Severity.MEDIUM,
         "Imitates a system, assistant or admin message",
     ),
@@ -234,6 +272,20 @@ def scan_text(text: str | None, field_name: str) -> list[Finding]:
     raw_hits = {p.name for p, _ in _match(text or "")}
     hits: list[tuple[Pattern, str]] = _match(n.clean)
     out: list[Finding] = []
+    folded = n.clean.translate(_LATIN_LOOKALIKES)
+    if folded != n.clean:
+        found = {p.name for p, _ in hits}
+        homoglyph_hits = [(p, s) for p, s in _match(folded) if p.name not in found]
+        if homoglyph_hits:
+            hits += homoglyph_hits
+            out.append(
+                Finding(
+                    code="OBFUSCATED_TEXT",
+                    severity=Severity.HIGH,
+                    detail=f"[{field_name}] Instruction is spelled with look-alike letters from another alphabet",
+                    source="detector",
+                )
+            )
 
     if n.smuggled:
         out.append(
@@ -381,8 +433,9 @@ _PROTECTED_BRANDS = ("paypal", "amazon", "apple", "google", "microsoft", "netfli
 
 def skeleton(name: str) -> str:
     """Collapse look-alike characters so 'PayPaI' and 'PayPal' compare equal."""
-    folded = unicodedata.normalize("NFKC", name).translate(_CONFUSABLES).lower()
-    return re.sub(r"[^a-z]", "", folded)
+    folded = unicodedata.normalize("NFKC", name).translate(_LATIN_LOOKALIKES).translate(_CONFUSABLES).lower()
+    letters = re.sub(r"[^a-z]", "", folded)
+    return letters.replace("rn", "m").replace("vv", "w")
 
 
 def check_merchant_lookalike(merchant_name: str, trusted_names: list[str]) -> list[Finding]:

@@ -54,6 +54,9 @@ class PayPalOrder:
     capture_id: str | None = None
     capture_status: str | None = None
     capture_amount: Decimal | None = None
+    unit_count: int = 1
+    payee_merchant_id: str | None = None
+    captured_total: Decimal | None = None  # every capture across every purchase unit
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
@@ -64,6 +67,16 @@ class PayPalOrder:
         captures = (unit.get("payments") or {}).get("captures") or []
         capture = captures[0] if captures else {}
         capture_amount = capture.get("amount") or {}
+        all_captures = [
+            c
+            for u in units
+            for c in ((u or {}).get("payments") or {}).get("captures") or []
+        ]
+        captured_total = (
+            sum((_amount((c.get("amount") or {}).get("value", "0")) for c in all_captures), Decimal("0"))
+            if all_captures
+            else None
+        )
         approve = next(
             (
                 link.get("href")
@@ -82,6 +95,9 @@ class PayPalOrder:
             capture_id=capture.get("id"),
             capture_status=capture.get("status"),
             capture_amount=_amount(capture_amount["value"]) if "value" in capture_amount else None,
+            unit_count=len(units),
+            payee_merchant_id=(unit.get("payee") or {}).get("merchant_id"),
+            captured_total=captured_total,
             raw=dict(data),
         )
 
@@ -394,8 +410,11 @@ class MockPayPal:
 
     name = "mock"
 
-    def __init__(self, public_base_url: str = "http://localhost:8000") -> None:
+    def __init__(self, public_base_url: str = "http://localhost:8000", *, accept_test_webhooks: bool = False) -> None:
         self._base = public_base_url.rstrip("/")
+        # A fake signature is only accepted when a test asks for it, so a server running on
+        # mock payments cannot be fed forged webhooks.
+        self._accept_test_webhooks = accept_test_webhooks
         self._orders: dict[str, dict[str, Any]] = {}
         self._by_request: dict[str, str] = {}
         self._refunds: dict[str, PayPalRefund] = {}
@@ -513,4 +532,6 @@ class MockPayPal:
             self._get(order_id)["amount"] = money(amount)
 
     def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
+        if not self._accept_test_webhooks:
+            return False
         return {k.lower(): v for k, v in headers.items()}.get("paypal-transmission-sig") == "mock-valid"

@@ -86,7 +86,7 @@ pip install -e ".[dev]"
 
 tollgate demo       # six scripted agent scenes against a private in-process server
 tollgate redteam    # the 26-scenario scorecard
-pytest -q           # 290+ tests, offline, a few seconds
+pytest -q           # 330+ tests, offline, a few seconds
 ```
 
 Watch it live in the dashboard:
@@ -164,13 +164,24 @@ approve held orders; use remote mode for that.)
 
 ## Deploy
 
-- **Docker:** `docker build -t tollgate . && docker run --rm -p 8000:8000 --env-file .env tollgate`
+- **Docker:** `docker build -t tollgate . && docker run --rm -p 8000:8000 --env-file .env tollgate`.
+  The container listens on a public address, so it refuses to start with the demo secrets. Put real ones in
+  `.env` first:
+
+  ```bash
+  echo "TOLLGATE_SIGNING_KEY=$(openssl rand -hex 32)" >> .env
+  echo "TOLLGATE_ADMIN_TOKEN=$(openssl rand -hex 24)" >> .env
+  echo "TOLLGATE_AGENT_TOKEN=$(openssl rand -hex 24)" >> .env
+  ```
+
+  For a throwaway local demo only, add `-e TOLLGATE_ALLOW_DEMO_SECRETS=1` instead.
 - **Render:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/utlityapps/tollgate)
   uses [`render.yaml`](render.yaml). Render generates the three secrets; copy `TOLLGATE_ADMIN_TOKEN` from the
   service's Environment tab to log in. It runs with mock payments until you add PayPal sandbox keys.
 
-Before exposing Tollgate beyond localhost, set `TOLLGATE_SIGNING_KEY`, `TOLLGATE_ADMIN_TOKEN` and
-`TOLLGATE_AGENT_TOKEN` (the dashboard and the CLI both warn if you haven't).
+`tollgate serve` refuses to listen beyond localhost until `TOLLGATE_SIGNING_KEY`, `TOLLGATE_ADMIN_TOKEN` and
+`TOLLGATE_AGENT_TOKEN` are set. Set `PAYPAL_MERCHANT_ID` to your sandbox business account's merchant id and
+Tollgate also refuses to capture an order that pays anyone else.
 
 ## REST API
 
@@ -194,12 +205,13 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 
 | Part | Evidence |
 |---|---|
-| Quotes, policy, detectors, judge, engine, API, MCP, CLI, dashboard script | 290+ offline tests; they also pass on Python 3.11 and 3.13 |
+| Quotes, policy, detectors, judge, engine, API, MCP, CLI, dashboard script | 330+ offline tests; they also pass on Python 3.11 and 3.13 |
 | PayPal Orders v2 client (create, get, capture, refund, retries, idempotency, 401 refresh, webhook verification) | Contract tests against a mocked HTTP transport |
 | Order tampering between approval and capture | Tested with the mock backend's `tamper_amount` hook |
 | Docker image (the one `render.yaml` deploys) | Built in CI on every push; the container serves the dashboard and the scripted demo runs against it |
 | Live PayPal sandbox | Run by hand with `tollgate smoke` on 2026-11-09: a real $1.00 sandbox order was created, approved by a sandbox buyer inside PayPal, and captured (`COMPLETED`). CI cannot reach PayPal, so the test suite covers this path with mocks; run `tollgate smoke` with your own sandbox keys to repeat it |
 | Claude judge and Claude demo agent | Tested with fake clients; a real-model run needs your `ANTHROPIC_API_KEY` |
+| Independent security audit | Two fresh-context reviews on 2026-11-11 confirmed 14 findings (2 high), all but one fixed with a regression test. See [docs/AUDIT.md](docs/AUDIT.md) |
 
 ## Limitations
 
@@ -208,7 +220,8 @@ curl -s -X POST localhost:8000/api/mandates -H "Authorization: Bearer demo-admin
 - The catalog is a built-in simulation (a few merchants and products, some of them hostile on purpose). The
   agent API is generic, but no real marketplace is connected.
 - Sandbox only. Live payments are intentionally off by default.
-- SQLite storage with a single-process lock. Fine for a demo; use a real database for more than that.
+- SQLite storage with a single-process lock. Run one process: with several workers on one database file the
+  daily limit is not atomic. Fine for a demo; use a real database for more than that.
 - The scripted demo's mock payment page is clearly labelled MOCK and is not PayPal.
 
 ## Project layout
@@ -223,7 +236,7 @@ src/tollgate/
   mcp_server.py   MCP tools          gateway.py   local and HTTP gateways
   redteam.py      26-scenario scorecard              agent_demo.py  scripted and Claude-driven demo
   static/         dashboard (AG Grid + AG Charts Community, vendored, MIT)
-tests/            290+ tests          docs/   threat model and dashboard screenshots
+tests/            330+ tests          docs/   threat model, audit and dashboard screenshots
 ```
 
 ## License
